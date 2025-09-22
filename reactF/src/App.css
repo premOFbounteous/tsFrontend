@@ -1,0 +1,14 @@
+@keyframes scroll {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      /* This moves the content by the width of the original set of items */
+      transform: translateX(-50%);
+    }
+  }
+
+  .animate-scroll {
+    /* Adjust the duration (e.g., 60s) to make the scroll slower or faster */
+    animation: scroll 10s linear infinite;
+  }
