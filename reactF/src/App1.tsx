@@ -250,7 +250,12 @@ export default function App() {
   };
   
   const handleCategorySelect = (category: string) => {
-    setSelectedCategory(category); 
+    // If the same category is clicked again, deselect it
+    if (selectedCategory === category) {
+      setSelectedCategory("");
+    } else {
+      setSelectedCategory(category); 
+    }
     setPage(1);
     document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -267,18 +272,20 @@ export default function App() {
         cartItemCount={cart.length}
       />
       
-      {/* The main content area now has a wider max-width for a better look */}
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
         <Slider />
         
         <CategoryCarousel 
           categories={categories}
           onCategorySelect={handleCategorySelect}
+          selectedCategory={selectedCategory}
         />
         
         <div id="products-section" className="py-12 max-w-7xl mx-auto">
            <h2 className="text-3xl font-bold text-center mb-2">Our Products</h2>
-           <p className="text-center text-gray-500 mb-8">Discover our curated selection of high-quality products.</p>
+           <p className="text-center text-gray-500 mb-8">
+             {selectedCategory ? `Showing products in "${selectedCategory.replace(/-/g, ' ')}"` : 'Discover our curated selection of high-quality products.'}
+           </p>
            
            <ProductFilters
              search={search}
@@ -420,8 +427,8 @@ const slides = [
   { id: 1, title: "Summer Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1926769/pexels-photo-1926769.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-yellow-50 to-pink-50" },
   { id: 2, title: "Winter Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1021693/pexels-photo-1021693.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-pink-50 to-blue-50" },
   { id: 3, title: "Spring Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1183266/pexels-photo-1183266.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-blue-50 to-yellow-50" },
-  { id: 4, title: "Electronics Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/3804415/pexels-photo-3804415.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-blue-50 to-yellow-50" },
-  { id: 5, title: "Healthy Fruits Collections", description: "Sale! Up to 20% off!", img: "https://images.pexels.com/photos/1132047/pexels-photo-1132047.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-blue-50 to-yellow-50" },
+  { id: 4, title: "Electronics Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/3804415/pexels-photo-3804415.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-teal-50 to-cyan-50" },
+  { id: 5, title: "Healthy Fruits Collections", description: "Sale! Up to 20% off!", img: "https://images.pexels.com/photos/1132047/pexels-photo-1132047.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-green-50 to-lime-50" },
 ];
 
 const Slider = () => {
@@ -475,45 +482,49 @@ const Slider = () => {
 };
 
 
-// --- NEW INFINITE CATEGORY CAROUSEL ---
-const CategoryCarousel = ({ categories, onCategorySelect }: {
+// --- UPDATED CATEGORY COMPONENT (NO CAROUSEL) ---
+const CategoryCarousel = ({ categories, onCategorySelect, selectedCategory }: {
   categories: string[];
   onCategorySelect: (category: string) => void;
+  selectedCategory: string | null;
 }) => {
     if (!categories || categories.length === 0) {
-        return null; // Don't render anything if there are no categories
+        return null;
     }
-    // Duplicate categories for the seamless infinite loop effect
-    const extendedCategories = [...categories, ...categories];
 
     return (
         <div className="py-12">
             <h2 className="text-3xl font-bold text-center mb-8">Explore Our Collections</h2>
-            <div
-                className="relative w-full overflow-hidden group"
-                style={{ maskImage: "linear-gradient(to right, transparent, black 5%, black 95%, transparent)" }}
-            >
-                <div className="flex animate-scroll group-hover:[animation-play-state:paused]">
-                    {extendedCategories.map((category, index) => (
-                        <div
-                            key={`${category}-${index}`}
-                            onClick={() => onCategorySelect(category)}
-                            className="flex-shrink-0 w-64 mx-4 cursor-pointer"
-                        >
-                            <div className="relative h-[28rem] w-full rounded-2xl overflow-hidden transition-all duration-10 hover:shadow-2xl hover:scale-[1.02]">
-                                <img
-                                    src={`/pics/${category}.jpg`}
-                                    alt={category}
-                                    className="w-full h-full object-cover transition-transform duration-500 ease-in-out group-hover:scale-110"
-                                    onError={(e: any) => e.target.src = `https://placehold.co/400x600/e2e8f0/334155?text=${category}`}
-                                />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent"></div>
-                                <h3 className="absolute bottom-6 left-6 text-3xl font-bold text-white capitalize">
-                                    {category.replace(/-/g, ' ')}
-                                </h3>
+            <div className="relative w-full">
+                <div className="flex p-4 gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                    {/* This parent div will manage the hover effect for all children */}
+                    <div className="flex gap-5 group">
+                        {categories.map((category) => (
+                            <div
+                                key={category}
+                                onClick={() => onCategorySelect(category)}
+                                className={`flex-shrink-0 w-60 cursor-pointer transition-all duration-500 ease-in-out
+                                  ${selectedCategory && selectedCategory !== category ? 'opacity-50 scale-95' : 'opacity-100 scale-100'}
+                                  group-hover:opacity-50 group-hover:scale-95 hover:!opacity-100 hover:!scale-105 hover:-translate-y-4
+                                `}
+                            >
+                                <div className={`relative h-[28rem] w-full bg-gray-200 overflow-hidden transition-all duration-300
+                                  ${selectedCategory === category ? 'ring-4 ring-black ring-offset-4' : ''}
+                                `}>
+                                    <img
+                                        src={`/pics/${category}.jpg`}
+                                        alt={category}
+                                        className="w-full h-full object-cover"
+                                        onError={(e: any) => e.target.src = `https://placehold.co/400x600/e2e8f0/334155?text=${category}`}
+                                    />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+                                    <h3 className="absolute bottom-5 left-5 text-2xl font-bold text-white capitalize">
+                                        {category.replace(/-/g, ' ')}
+                                    </h3>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
             </div>
         </div>
