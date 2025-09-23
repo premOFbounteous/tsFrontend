@@ -1,66 +1,230 @@
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Toaster, toast } from "sonner";
+import { cva, type VariantProps } from "class-variance-authority";
+import { cn } from "./lib/utils";
 
+// --- ICONS ---
+import { X, ShoppingCart, Star, Minus, Plus, LogOut, Loader2, ArrowRight, ChevronLeft, ChevronRight, Search, Heart, Menu, Mic, Sun, Moon, User, Package, Settings } from "lucide-react";
 
-// // --- SUB-COMPONENTS ---
+// ======================================================================
+// --- 1. TYPES & CONSTANTS ---
+// ======================================================================
 
-const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, onWishlistClick, cartItemCount }: {
-  user: string | null;
-  onLoginClick: () => void;
-  onLogoutClick: () => void;
-  onCartClick: () => void;
-  onWishlistClick: () => void;
-  cartItemCount: number;
-}) => {
+interface Product {
+  id: number; title: string; description: string; price: number; rating: number; stock: number; brand: string; category: string; thumbnail: string; images: string[];
+}
+interface CartItem {
+  product_id: number; title: string; price: number; image: string; quantity: number;
+}
+const API_BASE = "https://backfinal-7pi0.onrender.com";
+
+// ======================================================================
+// --- 2. API WRAPPER with Token Refresh Logic ---
+// ======================================================================
+
+const api = {
+  async request(method: string, endpoint: string, body: any = null) {
+    let accessToken = localStorage.getItem("accessToken");
+    const makeRequest = async (token: string | null) => {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const options: RequestInit = { method, headers };
+      if (body) options.body = JSON.stringify(body);
+      return fetch(`${API_BASE}${endpoint}`, options);
+    };
+    let res = await makeRequest(accessToken);
+    if (res.status === 401) {
+      const refreshToken = localStorage.getItem("refreshToken");
+      if (!refreshToken) { this.logout(); throw new Error("Session expired. Please log in again."); }
+      try {
+        const refreshRes = await fetch(`${API_BASE}/users/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) });
+        if (!refreshRes.ok) throw new Error("Session expired.");
+        const data = await refreshRes.json();
+        localStorage.setItem("accessToken", data.access_token);
+        localStorage.setItem("refreshToken", data.refresh_token);
+        res = await makeRequest(data.access_token);
+      } catch (error) { this.logout(); throw new Error("Session expired. Please log in again."); }
+    }
+    return res;
+  },
+  async get(endpoint: string) { return this.request('GET', endpoint); },
+  async post(endpoint: string, body: any) { return this.request('POST', endpoint, body); },
+  logout() {
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("refreshToken");
+    localStorage.removeItem("user");
+    window.dispatchEvent(new Event("authChange"));
+  }
+};
+
+// ======================================================================
+// --- 3. CUSTOM HOOKS ---
+// ======================================================================
+
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
+
+function useTheme() {
+    const [theme, setTheme] = useState(() => {
+        const savedTheme = localStorage.getItem("theme");
+        return savedTheme || 'system';
+    });
+
+    useEffect(() => {
+        const root = window.document.documentElement;
+        const systemIsDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        
+        root.classList.remove('light', 'dark');
+
+        if (theme === 'system') {
+            root.classList.add(systemIsDark ? 'dark' : 'light');
+        } else {
+            root.classList.add(theme);
+        }
+        
+        localStorage.setItem("theme", theme);
+    }, [theme]);
+
+    return [theme, setTheme] as const;
+}
+
+// ======================================================================
+// --- 4. UI SUB-COMPONENTS (DEFINED BEFORE APP) ---
+// ======================================================================
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-semibold ring-offset-background transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 dark:focus-visible:ring-gray-600 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  {
+    variants: {
+      variant: {
+        default: "bg-gray-900 text-white hover:bg-gray-700 dark:bg-gray-50 dark:text-gray-900 dark:hover:bg-gray-200",
+        destructive: "bg-red-500 text-white hover:bg-red-600",
+        outline: "border border-gray-200 bg-white hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-950 dark:hover:bg-gray-800",
+        ghost: "hover:bg-gray-100 dark:hover:bg-gray-800",
+      },
+      size: { default: "h-11 px-6 py-2", lg: "h-12 rounded-xl px-8 text-base" },
+    },
+    defaultVariants: { variant: "default", size: "default" },
+  }
+);
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, ...props }, ref) => (
+    <button className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />
+  )
+);
+
+const Dialog = ({ isOpen, onClose, children }: { isOpen: boolean; onClose: () => void; children: React.ReactNode }) => (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50" onClick={onClose} />
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ ease: "easeOut", duration: 0.2 }} className="relative z-10">
+            {children}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+);
+
+const Sheet = ({ isOpen, onClose, children }: { isOpen: boolean; onClose: () => void; children: React.ReactNode; }) => (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/40" onClick={onClose} />
+          <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", stiffness: 300, damping: 30 }} className="absolute top-0 right-0 h-full w-full max-w-md bg-white dark:bg-gray-950 shadow-xl flex flex-col">
+            {children}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+);
+
+const ImageWithLoader = ({ src, alt, className }: { src: string; alt: string; className: string; }) => {
+    const [isLoading, setIsLoading] = useState(true);
+    return (
+        <div className={cn("relative overflow-hidden", className)}>
+            <AnimatePresence>{isLoading && <motion.div initial={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-gray-100 dark:bg-gray-800 animate-pulse" />}</AnimatePresence>
+            <img src={src} alt={alt} className={cn("w-full h-full object-cover transition-opacity duration-300", isLoading ? 'opacity-0' : 'opacity-100')} onLoad={() => setIsLoading(false)} onError={(e: any) => {e.target.src = `https://placehold.co/600x800/e2e8f0/334155?text=Image+Not+Found`; setIsLoading(false)}}/>
+        </div>
+    );
+};
+
+// --- CHANGE 1: Accept wishlistItemCount prop ---
+const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, onWishlistClick, onProfileClick, cartItemCount, wishlistItemCount, theme, setTheme }: { user: string | null; onLoginClick: () => void; onLogoutClick: () => void; onCartClick: () => void; onWishlistClick: () => void; onProfileClick: () => void; cartItemCount: number; wishlistItemCount: number; theme: string; setTheme: (theme: string) => void; }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const navLinks = ["Catalogue", "Fashion", "Favourite", "Lifestyle"];
 
+  const [effectiveTheme, setEffectiveTheme] = useState('light');
+  useEffect(() => {
+    const systemIsDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setEffectiveTheme(theme === 'system' ? (systemIsDark ? 'dark' : 'light') : theme);
+  }, [theme]);
+
+
   return (
-    <header className="bg-white/80 backdrop-blur-lg shadow-sm sticky top-0 z-40">
+    <header className="bg-white/80 dark:bg-gray-950/80 backdrop-blur-lg shadow-sm sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-20">
-          <div className="flex items-center">
-            <a href="#" className="text-2xl font-bold tracking-wider">FASHION</a>
-          </div>
+          <a href="#" className="text-2xl font-bold tracking-wider text-gray-900 dark:text-white">FASHION</a>
           <nav className="hidden md:flex items-center space-x-8">
-            {navLinks.map(link => (
-              <a key={link} href="#" className="text-gray-600 hover:text-black transition-colors duration-200">{link}</a>
-            ))}
+            {navLinks.map(link => (<a key={link} href="#" className="text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white transition-colors">{link}</a>))}
           </nav>
-          <div className="flex items-center space-x-2">
-             {user ? (
-               <div className="flex items-center gap-3">
-                 <div className="w-10 h-10 flex items-center justify-center bg-black text-white font-bold rounded-full text-lg">
-                    {user.trim().charAt(0).toUpperCase()}
-                 </div>
-                 <button onClick={onLogoutClick} className="hidden lg:block text-sm bg-gray-100 hover:bg-gray-200 text-black px-4 py-2 rounded-lg transition-colors">Logout</button>
-               </div>
-             ) : (
-                <button onClick={onLoginClick} className="hidden md:block bg-black text-white px-5 py-2 rounded-lg font-semibold hover:bg-gray-800 transition-transform hover:scale-105">SIGN UP</button>
-             )}
-            <button onClick={onWishlistClick} className="relative p-2 rounded-full hover:bg-gray-100">
-                <Heart className="h-6 w-6"/>
-            </button>
-             <button onClick={onCartClick} className="relative p-2 rounded-full hover:bg-gray-100">
-                <ShoppingCart className="h-6 w-6"/>
-                {cartItemCount > 0 && <span className="absolute top-0 right-0 block h-5 w-5 rounded-full bg-yellow-400 text-black text-xs font-bold text-center leading-5">{cartItemCount}</span>}
-             </button>
-            <button className="md:hidden p-2" onClick={() => setMenuOpen(!menuOpen)}>
-              <Menu className="h-6 w-6"/>
-            </button>
+          <div className="flex items-center space-x-1">
+            <Button onClick={() => setTheme(effectiveTheme === 'dark' ? 'light' : 'dark')} variant="ghost" className="relative p-2 h-auto rounded-full">
+                {effectiveTheme === 'dark' ? <Sun/> : <Moon/>}
+            </Button>
+            {/* --- CHANGE 2: Display wishlist counter --- */}
+            <Button onClick={onWishlistClick} variant="ghost" className="relative p-2 h-auto rounded-full">
+              <Heart />
+              {wishlistItemCount > 0 && <span className="absolute top-0 right-0 block h-5 w-5 rounded-full bg-yellow-400 text-black text-xs font-bold text-center leading-5">{wishlistItemCount}</span>}
+            </Button>
+            <Button onClick={onCartClick} variant="ghost" className="relative p-2 h-auto rounded-full">
+              <ShoppingCart />
+              {cartItemCount > 0 && <span className="absolute top-0 right-0 block h-5 w-5 rounded-full bg-yellow-400 text-black text-xs font-bold text-center leading-5">{cartItemCount}</span>}
+            </Button>
+            {user ? (
+              <div className="relative">
+                <button onClick={() => setProfileDropdownOpen(o => !o)} className="w-10 h-10 ml-2 flex items-center justify-center bg-gray-900 dark:bg-gray-50 text-white dark:text-gray-900 font-bold rounded-full text-lg">{user.trim().charAt(0).toUpperCase()}</button>
+                <AnimatePresence>
+                {profileDropdownOpen && (
+                  <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded-lg shadow-lg p-1.5">
+                      <p className="px-3 py-2 font-semibold text-gray-900 dark:text-white truncate text-sm">{user}</p>
+                      <div className="h-px bg-gray-200 dark:bg-gray-700 my-1" />
+                      <button onClick={() => { onProfileClick(); setProfileDropdownOpen(false); }} className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"><User size={16} /> My Profile</button>
+                      <button onClick={onLogoutClick} className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors"><LogOut size={16} /> Logout</button>
+                  </motion.div>
+                )}
+                </AnimatePresence>
+              </div>
+            ) : (<Button onClick={onLoginClick} className="hidden md:block ml-2">SIGN UP</Button>)}
+            <button className="md:hidden p-2" onClick={() => setMenuOpen(!menuOpen)}><Menu /></button>
           </div>
         </div>
       </div>
-       {menuOpen && (
-          <div className="md:hidden bg-white py-4 px-4 space-y-2">
-             {navLinks.map(link => (
-              <a key={link} href="#" className="block text-gray-600 hover:text-black transition-colors duration-200 py-2">{link}</a>
-            ))}
-             {!user && <button onClick={()=>{onLoginClick(); setMenuOpen(false);}} className="w-full bg-black text-white px-5 py-2 rounded-lg font-semibold hover:bg-gray-800">SIGN UP</button>}
-          </div>
+      <AnimatePresence>
+        {menuOpen && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="md:hidden bg-white dark:bg-gray-950 overflow-hidden">
+            <div className="py-4 px-4 space-y-2 border-t dark:border-gray-800">
+              {navLinks.map(link => (<a key={link} href="#" className="block text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white rounded-md px-3 py-2">{link}</a>))}
+              {!user && <Button onClick={() => { onLoginClick(); setMenuOpen(false); }} className="w-full mt-2">SIGN UP</Button>}
+            </div>
+          </motion.div>
         )}
+      </AnimatePresence>
     </header>
   )
 };
 
+// ... (The rest of your components: Slider, CategoryCarousel, etc. remain unchanged)
 const slides = [
   { id: 1, title: "Summer Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1926769/pexels-photo-1926769.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-yellow-50 to-pink-50" },
   { id: 2, title: "Winter Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1021693/pexels-photo-1021693.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-pink-50 to-blue-50" },
@@ -119,359 +283,178 @@ const Slider = () => {
   );
 };
 
-const CategoryCarousel = ({ categories, onCategorySelect, selectedCategory }: {
-  categories: string[];
-  onCategorySelect: (category: string) => void;
-  selectedCategory: string | null;
-}) => {
-    if (!categories || categories.length === 0) {
-        return null;
-    }
 
-    return (
-        <div className="py-12">
-            <h2 className="text-3xl font-bold text-center mb-8">Explore Our Collections</h2>
-            <div className="relative w-full">
-                <div className="flex p-4 gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                    <div className="flex gap-5 group">
-                        {categories.map((category) => (
-                            <div
-                                key={category}
-                                onClick={() => onCategorySelect(category)}
-                                className={`flex-shrink-0 w-60 cursor-pointer transition-all duration-500 ease-in-out
-                                  ${selectedCategory && selectedCategory !== category ? 'opacity-50 scale-95' : 'opacity-100 scale-100'}
-                                  group-hover:opacity-50 group-hover:scale-95 hover:!opacity-100 hover:!scale-105 hover:-translate-y-4
-                                `}
-                            >
-                                <div className={`relative h-[28rem] w-full bg-gray-200 overflow-hidden transition-all duration-300
-                                  ${selectedCategory === category ? 'ring-4 ring-black ring-offset-4' : ''}
-                                `}>
-                                    <img
-                                        src={`/pics/${category}.jpg`}
-                                        alt={category}
-                                        className="w-full h-full object-cover"
-                                        onError={(e: any) => e.target.src = `https://placehold.co/400x600/e2e8f0/334155?text=${category}`}
-                                    />
-                                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
-                                    <h3 className="absolute bottom-5 left-5 text-2xl font-bold text-white capitalize">
-                                        {category.replace(/-/g, ' ')}
-                                    </h3>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+const CategoryCarousel = ({ categories, onCategorySelect, selectedCategory }: { categories: string[]; onCategorySelect: (category: string) => void; selectedCategory: string | null; }) => {
+  if (!categories || categories.length === 0) return null;
+  return (
+    <div className="py-12">
+      <h2 className="text-3xl font-bold text-center mb-8 dark:text-white">Explore Our Collections</h2>
+      <div className="flex p-4 gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-5 group mx-auto">
+          <div onClick={() => onCategorySelect("")} className={`flex-shrink-0 w-60 cursor-pointer transition-all duration-500 ease-in-out ${selectedCategory && selectedCategory !== "" ? 'opacity-50 scale-95' : 'opacity-100 scale-100'} group-hover:opacity-50 group-hover:scale-95 hover:!opacity-100 hover:!scale-105 hover:-translate-y-4`}>
+              <div className={`relative h-[28rem] w-full bg-gray-200 overflow-hidden transition-all duration-300 rounded-2xl ${selectedCategory === "" || selectedCategory === null ? 'ring-4 ring-gray-900 dark:ring-yellow-400 ring-offset-4 ring-offset-gray-50 dark:ring-offset-gray-950' : ''}`}>
+                  <ImageWithLoader src={`/images/all.jpg`} alt="All Products" className="w-full h-full" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+                  <h3 className="absolute bottom-5 left-5 text-2xl font-bold text-white capitalize">All Products</h3>
+              </div>
+          </div>
+          {categories.map((category) => (
+            <div key={category} onClick={() => onCategorySelect(category)} className={`flex-shrink-0 w-60 cursor-pointer transition-all duration-500 ease-in-out ${selectedCategory && selectedCategory !== category ? 'opacity-50 scale-95' : 'opacity-100 scale-100'} group-hover:opacity-50 group-hover:scale-95 hover:!opacity-100 hover:!scale-105 hover:-translate-y-4`}>
+              <div className={`relative h-[28rem] w-full bg-gray-200 overflow-hidden transition-all duration-300 rounded-2xl ${selectedCategory === category ? 'ring-4 ring-gray-900 dark:ring-yellow-400 ring-offset-4 ring-offset-gray-50 dark:ring-offset-gray-950' : ''}`}>
+                <ImageWithLoader src={`/public/${category}.jpg`} alt={category} className="w-full h-full" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+                <h3 className="absolute bottom-5 left-5 text-2xl font-bold text-white capitalize">{category.replace(/-/g, ' ')}</h3>
+              </div>
             </div>
+          ))}
         </div>
-    );
+      </div>
+    </div>
+  );
 };
 
-
-const ProductFilters = ({ search, setSearch, toggleMic, listening, micSupported, categories, selectedCategory, setSelectedCategory, sort, setSort }: any) => (
-  <div className="bg-white p-4 rounded-xl shadow-md border border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4">
+const ProductFilters = ({ search, setSearch, toggleMic, listening, micSupported, sort, setSort }: any) => (
+  <div className="bg-white dark:bg-gray-900 p-4 rounded-xl shadow-md border border-gray-100 dark:border-gray-800 flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
     <div className="relative w-full md:w-auto md:flex-1">
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
-      <input 
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search for products..."
-        className="w-full border rounded-lg pl-10 pr-12 py-2 focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none transition"
-      />
-       <button
-          type="button"
-          onClick={toggleMic}
-          disabled={!micSupported}
-          title={!micSupported ? "Voice search not supported" : "Search with voice"}
-          className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full transition-colors ${listening ? 'text-red-500 animate-pulse' : 'text-gray-500 hover:text-black'} ${!micSupported && 'cursor-not-allowed text-gray-300'}`}
-        >
-          <Mic className="h-5 w-5"/>
-       </button>
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search for products..." className="w-full border dark:border-gray-700 bg-transparent rounded-lg pl-10 pr-12 py-2.5 focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none transition" />
+      <button type="button" onClick={toggleMic} disabled={!micSupported} title={!micSupported ? "Voice search not supported" : "Search with voice"} className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full transition-colors ${listening ? 'text-red-500 animate-pulse' : 'text-gray-500 hover:text-black dark:hover:text-white'} ${!micSupported && 'cursor-not-allowed text-gray-300'}`}>
+        <Mic className="h-5 w-5"/>
+      </button>
     </div>
-    <div className="flex items-center gap-4 w-full md:w-auto">
-        <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="w-full md:w-auto border rounded-lg px-3 py-2 bg-white cursor-pointer focus:ring-2 focus:ring-yellow-400 outline-none">
-          <option value="">All Categories</option>
-          {categories.map((c:string) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)} className="w-full md:w-auto border rounded-lg px-3 py-2 bg-white cursor-pointer focus:ring-2 focus:ring-yellow-400 outline-none">
-          <option value="id">Default</option>
-          <option value="-price">Price: High-Low</option>
-          <option value="price">Price: Low-High</option>
-          <option value="-rating">Rating</option>
-        </select>
-    </div>
+    <select value={sort} onChange={(e) => setSort(e.target.value)} className="w-full md:w-auto border dark:border-gray-700 rounded-lg px-3 py-2.5 bg-white dark:bg-gray-900 cursor-pointer focus:ring-2 focus:ring-yellow-400 outline-none">
+      <option value="id">Default Sorting</option>
+      <option value="-price">Price: High to Low</option>
+      <option value="price">Price: Low to High</option>
+      <option value="-rating">Sort by Rating</option>
+    </select>
   </div>
 );
 
-const ProductCard = ({ product, onViewClick, onAddClick, onWishlistClick, isInWishlist, formatPrice }: {
-  product: Product;
-  onViewClick: () => void;
-  onAddClick: () => void;
-  onWishlistClick: () => void;
-  isInWishlist: boolean;
-  formatPrice: (p: number) => string;
-}) => (
-  <div className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col group transition-all duration-300 hover:shadow-2xl hover:-translate-y-2">
-    <div className="relative aspect-square mb-4 overflow-hidden rounded-xl">
-       <img src={product.thumbnail} alt={product.title} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-110" 
-       onError={(e:any) => e.target.src=`https://placehold.co/300x300/e2e8f0/334155?text=${product.title.split(' ').join('+')}`}/>
-       <button onClick={onWishlistClick} className="absolute top-2 right-2 bg-white/70 backdrop-blur-sm p-2 rounded-full text-gray-600 hover:text-red-500 transition-colors">
-         <Heart className={`h-5 w-5 ${isInWishlist ? 'text-red-500 fill-current' : ''}`}/>
-       </button>
-    </div>
-    <div className="flex-1 mb-4">
-      <h3 className="font-semibold text-base truncate" title={product.title}>{product.title}</h3>
-      <p className="text-xs text-gray-500">{product.category}</p>
-    </div>
-    <div className="flex items-center justify-between">
-      <div>
-        <div className="text-lg font-bold">{formatPrice(product.price)}</div>
-        <div className="text-xs text-yellow-600 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400 text-yellow-400"/> {product.rating.toFixed(1)}</div>
+const ProductCard = ({ product, onViewClick, onAddClick, onWishlistClick, isInWishlist, formatPrice }: { product: Product; onViewClick: () => void; onAddClick: () => void; onWishlistClick: () => void; isInWishlist: boolean; formatPrice: (p: number) => string; }) => (
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col group transition-all duration-300 hover:shadow-2xl hover:-translate-y-2">
+      <div className="relative aspect-[4/5] mb-4 overflow-hidden rounded-xl cursor-pointer" onClick={onViewClick}>
+        <ImageWithLoader src={product.thumbnail} alt={product.title} className="w-full h-full rounded-xl transition-transform duration-300 group-hover:scale-110"/>
+        <button onClick={(e) => { e.stopPropagation(); onWishlistClick(); }} className="absolute top-2 right-2 bg-white/70 dark:bg-gray-950/70 backdrop-blur-sm p-2 rounded-full text-gray-600 dark:text-gray-300 hover:text-red-500 transition-colors">
+          <Heart className={`h-5 w-5 ${isInWishlist ? 'text-red-500 fill-current' : ''}`}/>
+        </button>
       </div>
-      <div className="flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-        <button onClick={onViewClick} className="bg-gray-100 hover:bg-gray-200 text-black px-4 py-2 text-sm rounded-lg transition-colors">View</button>
-        <button onClick={onAddClick} className="bg-black text-white px-4 py-2 text-sm rounded-lg hover:bg-gray-800 transition-colors">Add</button>
+      <div className="flex-1 mb-4">
+        <h3 className="font-semibold text-base truncate" title={product.title}>{product.title}</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">{product.category}</p>
+      </div>
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-lg font-bold">{formatPrice(product.price)}</div>
+          <div className="text-xs text-yellow-600 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400 text-yellow-400"/> {product.rating.toFixed(1)}</div>
+        </div>
+        <Button onClick={onAddClick} className="h-10 px-4">Add</Button>
       </div>
     </div>
-  </div>
-);
+  );
 
-const ProductCardSkeleton = () => (
-  <div className="bg-gray-100 rounded-2xl p-4 animate-pulse">
-    <div className="aspect-square mb-4 bg-gray-200 rounded-xl"></div>
-    <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-    <div className="h-3 bg-gray-200 rounded w-1/2 mb-4"></div>
-    <div className="flex items-center justify-between">
-       <div className="h-6 bg-gray-200 rounded w-1/4"></div>
-       <div className="h-8 bg-gray-200 rounded-lg w-1/3"></div>
-    </div>
-  </div>
-);
+const ProductCardSkeleton = () => (<div className="bg-gray-100 dark:bg-gray-800/50 rounded-2xl p-4 animate-pulse"><div className="aspect-[4/5] mb-4 bg-gray-200 dark:bg-gray-700 rounded-xl"></div><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-2"></div><div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-1/2 mb-4"></div><div className="flex items-center justify-between"><div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div><div className="h-10 bg-gray-200 dark:bg-gray-700 rounded-lg w-1/3"></div></div></div>);
 
 const Pagination = ({ page, pages, onPageChange }: { page: number; pages: number; onPageChange: (p: number) => void; }) => (
   <div className="mt-10 flex items-center justify-center gap-2">
-    <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1} className="px-4 py-2 border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">Prev</button>
-    <span className="text-sm text-gray-600">Page {page} of {pages}</span>
-    <button onClick={() => onPageChange(Math.min(pages, page + 1))} disabled={page >= pages} className="px-4 py-2 border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+    <Button variant="outline" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1}>Previous</Button>
+    <span className="text-sm text-gray-600 dark:text-gray-300 font-medium px-4">Page {page} of {pages}</span>
+    <Button variant="outline" onClick={() => onPageChange(Math.min(pages, page + 1))} disabled={page >= pages}>Next</Button>
   </div>
 );
 
 const BrandLogos = () => {
-    const logos = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/H%26M-Logo.svg/1280px-H%26M-Logo.svg.png",
-        "https://upload.wikimedia.org/wikipedia/commons/a/a6/Calvin_klein_logo_web23.svg",
-        "https://upload.wikimedia.org/wikipedia/commons/0/00/Samsung_Orig_Wordmark_BLACK_RGB.png",
-        "https://upload.wikimedia.org/wikipedia/commons/0/02/Levi%27s_logo_%282011%29.svg",
-        "https://upload.wikimedia.org/wikipedia/commons/c/c5/Gucci_logo.svg"
-    ];
+    const logos = [ "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/H%26M-Logo.svg/1280px-H%26M-Logo.svg.png", "https://upload.wikimedia.org/wikipedia/commons/a/a6/Calvin_klein_logo_web23.svg", "https://upload.wikimedia.org/wikipedia/commons/0/00/Samsung_Orig_Wordmark_BLACK_RGB.png", "https://upload.wikimedia.org/wikipedia/commons/0/02/Levi%27s_logo_%282011%29.svg", "https://upload.wikimedia.org/wikipedia/commons/c/c5/Gucci_logo.svg" ];
     return (
-        <div className="py-12 border-t border-gray-100">
-            <div className="max-w-5xl mx-auto flex justify-around items-center gap-8 flex-wrap">
-                {logos.map((logo, i) => (
-                    <img key={i} src={logo} alt={`Brand ${i}`} className="h-8 object-contain" style={{filter: 'grayscale(100%)', opacity: 0.6}}/>
-                ))}
-            </div>
-        </div>
+        <div className="py-12 border-t border-gray-100 dark:border-gray-800"><div className="max-w-5xl mx-auto flex justify-around items-center gap-8 flex-wrap">{logos.map((logo, i) => (<img key={i} src={logo} alt={`Brand ${i}`} className="h-8 object-contain dark:invert dark:brightness-0 opacity-60"/>))}</div></div>
     );
 };
 
 const Footer = () => (
-    <footer className="bg-black text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="bg-yellow-400 text-black p-10 rounded-2xl text-center mb-16">
-                <h2 className="text-3xl font-bold">JOIN SHOPPING COMMUNITY TO GET MONTHLY PROMO</h2>
-                <p className="mt-2 text-gray-800">Type your email down below and be young wild generation</p>
-                <form className="mt-6 max-w-md mx-auto flex">
-                    <input type="email" placeholder="Add your email here" className="flex-1 rounded-l-lg px-4 py-3 border-black outline-none"/>
-                    <button type="submit" className="bg-black text-white px-6 py-3 rounded-r-lg font-semibold">SEND</button>
-                </form>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-                <div>
-                    <h3 className="text-2xl font-bold">FASHION</h3>
-                    <p className="mt-4 text-gray-400">Complete your style with awesome clothes from us.</p>
-                </div>
-                <div>
-                    <h4 className="font-semibold">Company</h4>
-                    <ul className="mt-4 space-y-2 text-gray-400">
-                        <li><a href="#" className="hover:text-white">About</a></li>
-                        <li><a href="#" className="hover:text-white">Contact us</a></li>
-                        <li><a href="#" className="hover:text-white">Support</a></li>
-                        <li><a href="#" className="hover:text-white">Careers</a></li>
-                    </ul>
-                </div>
-                <div>
-                    <h4 className="font-semibold">Quick Link</h4>
-                    <ul className="mt-4 space-y-2 text-gray-400">
-                        <li><a href="#" className="hover:text-white">Orders Tracking</a></li>
-                        <li><a href="#" className="hover:text-white">Size Guide</a></li>
-                        <li><a href="#" className="hover:text-white">FAQs</a></li>
-                    </ul>
-                </div>
-                <div>
-                    <h4 className="font-semibold">Legal</h4>
-                    <ul className="mt-4 space-y-2 text-gray-400">
-                        <li><a href="#" className="hover:text-white">Terms & conditions</a></li>
-                        <li><a href="#" className="hover:text-white">Privacy Policy</a></li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </footer>
+    <footer className="bg-black text-white"><div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16"><div className="bg-yellow-400 text-black p-10 rounded-2xl text-center mb-16"><h2 className="text-3xl font-bold">JOIN SHOPPING COMMUNITY TO GET MONTHLY PROMO</h2><p className="mt-2 text-gray-800">Type your email down below and be young wild generation</p><form className="mt-6 max-w-md mx-auto flex"><input type="email" placeholder="Add your email here" className="flex-1 rounded-l-lg px-4 py-3 border-black outline-none text-black"/><button type="submit" className="bg-black text-white px-6 py-3 rounded-r-lg font-semibold">SEND</button></form></div><div className="grid grid-cols-1 md:grid-cols-4 gap-8"><div><h3 className="text-2xl font-bold">FASHION</h3><p className="mt-4 text-gray-400">Complete your style with awesome clothes from us.</p></div><div><h4 className="font-semibold">Company</h4><ul className="mt-4 space-y-2 text-gray-400"><li><a href="#" className="hover:text-white">About</a></li><li><a href="#" className="hover:text-white">Contact us</a></li><li><a href="#" className="hover:text-white">Support</a></li><li><a href="#" className="hover:text-white">Careers</a></li></ul></div><div><h4 className="font-semibold">Quick Link</h4><ul className="mt-4 space-y-2 text-gray-400"><li><a href="#" className="hover:text-white">Orders Tracking</a></li><li><a href="#" className="hover:text-white">Size Guide</a></li><li><a href="#" className="hover:text-white">FAQs</a></li></ul></div><div><h4 className="font-semibold">Legal</h4><ul className="mt-4 space-y-2 text-gray-400"><li><a href="#" className="hover:text-white">Terms & conditions</a></li><li><a href="#" className="hover:text-white">Privacy Policy</a></li></ul></div></div></div></footer>
 );
 
-const ProductDetailDialog = ({ product, onClose, onAddToCart, formatPrice }: {
-  product: Product;
-  onClose: () => void;
-  onAddToCart: (p: Product, q: number) => void;
-  formatPrice: (p: number) => string;
-}) => {
+const ProductDetailDialog = ({ product, onClose, onAddToCart, onSelectRelated, formatPrice }: { product: Product; onClose: () => void; onAddToCart: (p: Product, q: number) => void; onSelectRelated: (p: Product) => void; formatPrice: (p: number) => string; }) => {
   const [quantity, setQuantity] = useState(1);
+  const [related, setRelated] = useState<Product[]>([]);
+
+  useEffect(() => {
+    if (product) {
+      const fetchRelated = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/products?category=${product.category}&limit=5`);
+          let data = await res.json();
+          setRelated(data.products.filter((p: Product) => p.id !== product.id).slice(0, 4));
+        } catch { setRelated([]); }
+      };
+      fetchRelated();
+    }
+  }, [product]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
-      <div className="bg-white rounded-2xl max-w-4xl w-full shadow-lg relative max-h-[90vh] overflow-y-auto">
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-black p-2 rounded-full bg-gray-100 z-10"><X size={20}/></button>
-        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div>
-             <img src={product.images?.[0] || product.thumbnail} alt={product.title} className="w-full h-auto aspect-square object-cover rounded-xl" />
-          </div>
-          <div>
-            <span className="text-sm bg-yellow-100 text-yellow-800 font-medium px-2 py-1 rounded">{product.category}</span>
-            <h2 className="text-3xl font-bold mt-2">{product.title}</h2>
-            <p className="text-gray-500 text-sm mt-1">{product.brand}</p>
-            <div className="flex items-center gap-2 mt-4">
-               <div className="flex items-center gap-1 text-yellow-500">
-                   {[...Array(5)].map((_, i) => <Star key={i} size={20} className={i < Math.round(product.rating) ? "fill-current" : "text-gray-300"} />)}
-               </div>
-               <span className="text-gray-600 font-semibold">{product.rating.toFixed(1)}</span>
-            </div>
-            <p className="text-sm text-gray-700 my-4">{product.description}</p>
-            <div className="text-3xl font-bold my-6">{formatPrice(product.price)}</div>
-            <div className="flex items-center gap-4">
-                <div className="flex items-center border rounded-lg">
-                    <button onClick={() => setQuantity(q => Math.max(1, q-1))} className="px-3 py-2 text-gray-600"><Minus size={16}/></button>
-                    <span className="px-4 py-2 font-semibold">{quantity}</span>
-                    <button onClick={() => setQuantity(q => q+1)} className="px-3 py-2 text-gray-600"><Plus size={16}/></button>
+    <Dialog isOpen={true} onClose={onClose}>
+        <div className="bg-white dark:bg-gray-900 rounded-2xl max-w-4xl w-full shadow-lg relative max-h-[90vh] overflow-y-auto">
+            <Button variant="ghost" className="absolute top-4 right-4 h-auto p-2 rounded-full z-10" onClick={onClose}><X size={20}/></Button>
+            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+                <ImageWithLoader src={product.images?.[0] || product.thumbnail} alt={product.title} className="w-full h-auto aspect-square rounded-xl bg-gray-100 dark:bg-gray-800" />
+                <div>
+                    <span className="text-sm bg-yellow-100 text-yellow-800 font-medium px-2 py-1 rounded capitalize">{product.category.replace(/-/g, ' ')}</span>
+                    <h2 className="text-3xl font-bold mt-2 dark:text-white">{product.title}</h2>
+                    <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{product.brand}</p>
+                    <div className="flex items-center gap-2 mt-4"><div className="flex items-center gap-1 text-yellow-500">{[...Array(5)].map((_, i) => <Star key={i} size={20} className={i < Math.round(product.rating) ? "fill-current" : "text-gray-300"} />)}</div><span className="text-gray-600 dark:text-gray-300 font-semibold">{product.rating.toFixed(1)}</span></div>
+                    <p className="text-sm text-gray-700 dark:text-gray-300 my-4">{product.description}</p>
+                    <div className="text-3xl font-bold my-6 dark:text-white">{formatPrice(product.price)}</div>
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center border dark:border-gray-700 rounded-lg"><button onClick={() => setQuantity(q => Math.max(1, q-1))} className="px-3 py-2 text-gray-600 dark:text-gray-300"><Minus size={16}/></button><span className="px-4 py-2 font-semibold">{quantity}</span><button onClick={() => setQuantity(q => q+1)} className="px-3 py-2 text-gray-600 dark:text-gray-300"><Plus size={16}/></button></div>
+                        <Button onClick={() => { onAddToCart(product, quantity); onClose(); }} className="flex-1 h-12">Add to Cart</Button>
+                    </div>
                 </div>
-                <button 
-                  onClick={() => onAddToCart(product, quantity)} 
-                  className="flex-1 bg-black text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-800 transition-transform hover:scale-105"
-                >
-                  Add to Cart
-                </button>
             </div>
-            <div className="text-sm mt-4 text-green-600 font-medium">In Stock: {product.stock} items</div>
-          </div>
+            {related.length > 0 && (
+                <div className="p-6 border-t dark:border-gray-800">
+                    <h3 className="font-bold text-xl mb-4">You Might Also Like</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {related.map(p => (
+                            <div key={p.id} onClick={() => onSelectRelated(p)} className="cursor-pointer group">
+                                <ImageWithLoader src={p.thumbnail} alt={p.title} className="aspect-square rounded-lg bg-gray-100 dark:bg-gray-800"/>
+                                <h4 className="text-sm font-semibold mt-2 truncate group-hover:underline">{p.title}</h4>
+                                <p className="text-sm font-bold">{formatPrice(p.price)}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 };
 
-const CartSheet = ({ isOpen, onClose, cart, changeQty, removeFromCart, checkout, formatPrice }: {
-  isOpen: boolean;
-  onClose: () => void;
-  cart: CartItem[];
-  changeQty: (id: number, qty: number) => void;
-  removeFromCart: (id: number) => void;
-  checkout: () => void;
-  formatPrice: (p: number) => string;
-}) => (
-    <div className={`fixed inset-0 z-50 transition-all duration-300 ${isOpen ? 'bg-black/40' : 'bg-transparent pointer-events-none'}`}>
-        <div 
-          onClick={onClose} 
-          className={`absolute inset-0 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
-        />
-        <div className={`absolute top-0 right-0 h-full w-full max-w-md bg-white shadow-xl transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-            <div className="flex flex-col h-full">
-                <div className="flex items-center justify-between p-6 border-b">
-                    <h3 className="text-xl font-bold">Shopping Cart</h3>
-                    <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100"><X size={20}/></button>
-                </div>
-                {cart.length === 0 ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-                        <ShoppingCart size={48} className="text-gray-300 mb-4"/>
-                        <h4 className="font-semibold text-lg">Your cart is empty</h4>
-                        <p className="text-gray-500">Looks like you haven't added anything yet.</p>
-                    </div>
-                ) : (
-                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                        {cart.map(it => (
-                            <div key={it.product_id} className="flex items-start gap-4">
-                                <img src={it.image} alt={it.title} className="w-20 h-20 object-cover rounded-lg"/>
-                                <div className="flex-1">
-                                    <h4 className="font-semibold">{it.title}</h4>
-                                    <p className="text-sm text-gray-500">{formatPrice(it.price)}</p>
-                                    <div className="flex items-center gap-2 mt-2">
-                                        <input type="number" min="1" value={it.quantity} onChange={e => changeQty(it.product_id, Number(e.target.value || 1))} className="w-16 border rounded-md px-2 py-1 text-center"/>
-                                        <button onClick={() => removeFromCart(it.product_id)} className="text-sm text-red-500 hover:underline">Remove</button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-                <div className="p-6 border-t bg-gray-50">
-                    <div className="flex justify-between font-bold text-lg mb-4">
-                        <span>Subtotal</span>
-                        <span>{formatPrice(cart.reduce((s, i) => s + i.price * i.quantity, 0))}</span>
-                    </div>
-                    <button onClick={checkout} disabled={cart.length === 0} className="w-full bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                        Proceed to Checkout
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
+const CartSheet = ({ isOpen, onClose, cart, changeQty, removeFromCart, checkout, formatPrice }: { isOpen: boolean; onClose: () => void; cart: CartItem[]; changeQty: (id: number, qty: number) => void; removeFromCart: (id: number) => void; checkout: () => void; formatPrice: (p: number) => string; }) => (
+    <Sheet isOpen={isOpen} onClose={onClose}>
+        <div className="flex items-center justify-between p-6 border-b dark:border-gray-800"><h3 className="text-xl font-bold dark:text-white">Shopping Cart</h3><Button variant="ghost" className="h-auto p-2 rounded-full" onClick={onClose}><X size={20}/></Button></div>
+        {cart.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-6"><ShoppingCart size={48} className="text-gray-300 dark:text-gray-600 mb-4"/><h4 className="font-semibold text-lg dark:text-white">Your cart is empty</h4><p className="text-gray-500 dark:text-gray-400">Looks like you haven't added anything yet.</p><Button onClick={onClose} variant="outline" className="mt-4">Start Shopping</Button></div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {cart.map(it => (<div key={it.product_id} className="flex items-start gap-4"><ImageWithLoader src={it.image} alt={it.title} className="w-20 h-20 rounded-lg shrink-0"/><div className="flex-1"><h4 className="font-semibold dark:text-white">{it.title}</h4><p className="text-sm text-gray-500 dark:text-gray-400">{formatPrice(it.price)}</p><div className="flex items-center gap-2 mt-2"><input type="number" min="1" value={it.quantity} onChange={e => changeQty(it.product_id, Number(e.target.value || 1))} className="w-16 border dark:border-gray-700 bg-transparent rounded-md px-2 py-1 text-center"/><button onClick={() => removeFromCart(it.product_id)} className="text-sm text-red-500 hover:underline">Remove</button></div></div></div>))}
+          </div>
+        )}
+        <div className="p-6 border-t dark:border-gray-800 bg-gray-50 dark:bg-gray-950/50"><div className="flex justify-between font-bold text-lg mb-4 dark:text-white"><span>Subtotal</span><span>{formatPrice(cart.reduce((s, i) => s + i.price * i.quantity, 0))}</span></div><Button onClick={checkout} disabled={cart.length === 0} className="w-full">Proceed to Checkout</Button></div>
+    </Sheet>
 );
 
-const WishlistSheet = ({ isOpen, onClose, wishlist, onAddToCart, onRemoveFromWishlist, formatPrice }: {
-  isOpen: boolean;
-  onClose: () => void;
-  wishlist: Product[];
-  onAddToCart: (product: Product) => void;
-  onRemoveFromWishlist: (product: Product) => void;
-  formatPrice: (p: number) => string;
-}) => (
-    <div className={`fixed inset-0 z-50 transition-all duration-300 ${isOpen ? 'bg-black/40' : 'bg-transparent pointer-events-none'}`}>
-        <div 
-          onClick={onClose} 
-          className={`absolute inset-0 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
-        />
-        <div className={`absolute top-0 right-0 h-full w-full max-w-md bg-white shadow-xl transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-            <div className="flex flex-col h-full">
-                <div className="flex items-center justify-between p-6 border-b">
-                    <h3 className="text-xl font-bold">Your Wishlist</h3>
-                    <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100"><X size={20}/></button>
-                </div>
-                {wishlist.length === 0 ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-                        <Heart size={48} className="text-gray-300 mb-4"/>
-                        <h4 className="font-semibold text-lg">Your wishlist is empty</h4>
-                        <p className="text-gray-500">Add your favorite items to see them here.</p>
-                    </div>
-                ) : (
-                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                        {wishlist.map(product => (
-                            <div key={product.id} className="flex items-start gap-4">
-                                <img src={product.thumbnail} alt={product.title} className="w-20 h-20 object-cover rounded-lg"/>
-                                <div className="flex-1">
-                                    <h4 className="font-semibold">{product.title}</h4>
-                                    <p className="text-sm text-gray-500">{formatPrice(product.price)}</p>
-                                    <div className="flex items-center gap-4 mt-2">
-                                        <button onClick={() => { onAddToCart(product); onRemoveFromWishlist(product); }} className="text-sm text-blue-500 hover:underline">Move to Cart</button>
-                                        <button onClick={() => onRemoveFromWishlist(product)} className="text-sm text-red-500 hover:underline">Remove</button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    </div>
+const WishlistSheet = ({ isOpen, onClose, wishlist, onAddToCart, onRemoveFromWishlist, formatPrice }: { isOpen: boolean; onClose: () => void; wishlist: Product[]; onAddToCart: (product: Product) => void; onRemoveFromWishlist: (product: Product) => void; formatPrice: (p: number) => string; }) => (
+    <Sheet isOpen={isOpen} onClose={onClose}>
+        <div className="flex items-center justify-between p-6 border-b dark:border-gray-800"><h3 className="text-xl font-bold dark:text-white">Your Wishlist</h3><Button variant="ghost" className="h-auto p-2 rounded-full" onClick={onClose}><X size={20}/></Button></div>
+        {wishlist.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-6"><Heart size={48} className="text-gray-300 dark:text-gray-600 mb-4"/><h4 className="font-semibold text-lg dark:text-white">Your wishlist is empty</h4><p className="text-gray-500 dark:text-gray-400">Add your favorite items to see them here.</p><Button onClick={onClose} variant="outline" className="mt-4">Discover Products</Button></div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {wishlist.map(product => (<div key={product.id} className="flex items-start gap-4"><ImageWithLoader src={product.thumbnail} alt={product.title} className="w-20 h-20 rounded-lg shrink-0"/><div className="flex-1"><h4 className="font-semibold dark:text-white">{product.title}</h4><p className="text-sm text-gray-500 dark:text-gray-400">{formatPrice(product.price)}</p><div className="flex items-center gap-4 mt-2"><button onClick={() => { onAddToCart(product); onRemoveFromWishlist(product); }} className="text-sm text-blue-500 hover:underline">Move to Cart</button><button onClick={() => onRemoveFromWishlist(product)} className="text-sm text-red-500 hover:underline">Remove</button></div></div></div>))}
+          </div>
+        )}
+    </Sheet>
 );
-
 
 const AuthDialog = ({ onClose, handleAuth }: { onClose: () => void; handleAuth: (m: 'login' | 'register', e: string, u: string, p: string) => Promise<void> }) => {
     const [mode, setMode] = useState<'login' | 'register'>("login");
@@ -479,603 +462,347 @@ const AuthDialog = ({ onClose, handleAuth }: { onClose: () => void; handleAuth: 
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
-
-    const submit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        await handleAuth(mode, email, username, password);
-        setLoading(false);
-    }
+    const submit = async (e: React.FormEvent) => { e.preventDefault(); setLoading(true); await handleAuth(mode, email, username, password); setLoading(false); }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fade-in">
-            <div className="bg-white rounded-2xl p-8 w-full max-w-md relative shadow-lg">
-                <button onClick={onClose} className="absolute top-4 right-4 p-2 rounded-full text-gray-400 hover:text-black hover:bg-gray-100"><X size={20}/></button>
-                <h2 className="text-2xl font-bold mb-2 text-center">{mode === 'login' ? 'Welcome Back!' : 'Create an Account'}</h2>
-                <p className="text-gray-500 mb-6 text-center">{mode === 'login' ? 'Login to continue shopping' : 'Sign up to get started'}</p>
+        <Dialog isOpen={true} onClose={onClose}>
+            <div className="bg-white dark:bg-gray-900 rounded-2xl p-8 w-full max-w-md relative shadow-lg">
+                <Button variant="ghost" className="absolute top-4 right-4 h-auto p-2 rounded-full" onClick={onClose}><X size={20}/></Button>
+                <h2 className="text-2xl font-bold mb-2 text-center dark:text-white">{mode === 'login' ? 'Welcome Back!' : 'Create an Account'}</h2>
+                <p className="text-gray-500 dark:text-gray-400 mb-6 text-center">{mode === 'login' ? 'Login to continue shopping' : 'Sign up to get started'}</p>
                 <form onSubmit={submit} className="space-y-4">
-                    {mode === 'register' && <input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} className="w-full border rounded-lg px-4 py-2" required />}
-                    <input type="email" placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)} className="w-full border rounded-lg px-4 py-2" required />
-                    <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="w-full border rounded-lg px-4 py-2" required />
-                    <button type="submit" disabled={loading} className="w-full bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition disabled:opacity-70">{loading ? 'Processing...' : (mode === 'login' ? 'Login' : 'Register')}</button>
+                    {mode === 'register' && <input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} className="w-full border dark:border-gray-700 bg-transparent rounded-lg px-4 py-2" required />}
+                    <input type="email" placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)} className="w-full border dark:border-gray-700 bg-transparent rounded-lg px-4 py-2" required />
+                    <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="w-full border dark:border-gray-700 bg-transparent rounded-lg px-4 py-2" required />
+                    <Button type="submit" disabled={loading} className="w-full">{loading ? <Loader2 className="animate-spin" /> : (mode === 'login' ? 'Login' : 'Register')}</Button>
                 </form>
-                <div className="text-center text-sm text-gray-500 mt-4">
-                    {mode === 'login' ? "Don't have an account? " : "Already have an account? "}
-                    <button className="font-semibold text-black hover:underline" onClick={() => setMode(m => m === 'login' ? 'register' : 'login')}>
-                        {mode === 'login' ? 'Register' : 'Login'}
-                    </button>
-                </div>
+                <div className="text-center text-sm text-gray-500 dark:text-gray-400 mt-4">{mode === 'login' ? "Don't have an account? " : "Already have an account? "}<button className="font-semibold text-gray-900 dark:text-white hover:underline" onClick={() => setMode(m => m === 'login' ? 'register' : 'login')}>{mode === 'login' ? 'Register' : 'Login'}</button></div>
             </div>
-        </div>
+        </Dialog>
     );
 };
 
-const Toast = ({ message, onDismiss }: { message: string; onDismiss: () => void; }) => (
-    <div className="fixed right-6 bottom-6 bg-black text-white p-4 rounded-lg shadow-lg animate-toast-in">
-        <span>{message}</span>
-        <button onClick={onDismiss} className="ml-4 font-bold opacity-70 hover:opacity-100">×</button>
-    </div>
-);
+const ProfileSheet = ({ isOpen, onClose, user, onLogoutClick, onWishlistClick }: { isOpen: boolean; onClose: () => void; user: string | null; onLogoutClick: () => void; onWishlistClick: () => void; }) => {
+  const listVariants = {
+    visible: { transition: { staggerChildren: 0.07, delayChildren: 0.2 } },
+    hidden: {},
+  };
+  const itemVariants = {
+    visible: { y: 0, opacity: 1, transition: { y: { stiffness: 1000, velocity: -100 } } },
+    hidden: { y: 20, opacity: 0, transition: { y: { stiffness: 1000 } } },
+  };
+  const menuItems = [
+    { icon: User, label: "Personal Information" },
+    { icon: Package, label: "My Orders" },
+    { icon: Heart, label: "My Wishlist", action: onWishlistClick },
+    { icon: Settings, label: "Settings" },
+  ];
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Search, Mic, X, User, ShoppingCart, Menu, Minus, Plus, Star, Heart } from 'lucide-react';
-
-// --- TYPE DEFINITIONS ---
-interface Product {
-  id: number;
-  title: string;
-  description: string;
-  price: number;
-  rating: number;
-  stock: number;
-  brand: string;
-  category: string;
-  thumbnail: string;
-  images: string[];
-}
-
-interface CartItem {
-  product_id: number;
-  title:string;
-  price: number;
-  image: string;
-  quantity: number;
-}
-
-// --- API BASE URL ---
-const API_BASE = "https://backfinal-7pi0.onrender.com";
-// const API_BASE = "http://localhost:8000";
-
-// --- API Wrapper ---
-const api = {
-  async get(endpoint: string) {
-    return this.request('GET', endpoint);
-  },
-  async post(endpoint: string, body: any) {
-    return this.request('POST', endpoint, body);
-  },
-  async request(method: string, endpoint: string, body: any = null) {
-    let accessToken = localStorage.getItem("accessToken");
-
-    const makeRequest = async (token: string | null) => {
-      const headers: HeadersInit = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      const options: RequestInit = { method, headers };
-      if (body) {
-        options.body = JSON.stringify(body);
-      }
-      return fetch(`${API_BASE}${endpoint}`, options);
-    };
-
-    let res = await makeRequest(accessToken);
-
-    if (res.status === 401) {
-      const refreshToken = localStorage.getItem("refreshToken");
-      if (!refreshToken) {
-        this.logout();
-        throw new Error("Session expired. Please log in again.");
-      }
-
-      try {
-        const refreshRes = await fetch(`${API_BASE}/users/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        });
-
-        if (!refreshRes.ok) {
-          this.logout();
-          throw new Error("Session expired. Please log in again.");
-        }
-
-        const data = await refreshRes.json();
-        localStorage.setItem("accessToken", data.access_token);
-        localStorage.setItem("refreshToken", data.refresh_token);
-
-        res = await makeRequest(data.access_token);
-
-      } catch (error) {
-        this.logout();
-        throw new Error("Session expired. Please log in again.");
-      }
-    }
-
-    return res;
-  },
-  logout() {
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
-    localStorage.removeItem("user");
-    window.dispatchEvent(new Event("authChange"));
-  }
+  return (
+    <Sheet isOpen={isOpen} onClose={onClose}>
+        <div className="flex items-center justify-between p-6 border-b dark:border-gray-800">
+            <h3 className="text-xl font-bold dark:text-white">My Profile</h3>
+            <Button variant="ghost" className="h-auto p-2 rounded-full" onClick={onClose}><X size={20}/></Button>
+        </div>
+        <div className="flex-1 flex flex-col p-6">
+            <div className="flex items-center gap-4 pb-6 border-b dark:border-gray-800">
+                <div className="w-16 h-16 flex items-center justify-center bg-gray-900 dark:bg-gray-50 text-white dark:text-gray-900 font-bold rounded-full text-3xl">
+                    {user?.trim().charAt(0).toUpperCase()}
+                </div>
+                <div>
+                    <h4 className="text-lg font-bold dark:text-white">{user}</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Welcome back!</p>
+                </div>
+            </div>
+            <motion.ul variants={listVariants} initial="hidden" animate="visible" className="mt-6 space-y-2">
+                {menuItems.map(item => (
+                    <motion.li key={item.label} variants={itemVariants}>
+                        <button onClick={item.action} className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors text-left">
+                            <item.icon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+                            <span className="font-semibold text-gray-800 dark:text-gray-200">{item.label}</span>
+                        </button>
+                    </motion.li>
+                ))}
+            </motion.ul>
+            <div className="mt-auto">
+                <Button onClick={onLogoutClick} variant="outline" className="w-full flex items-center gap-2">
+                    <LogOut size={16} /> Logout
+                </Button>
+            </div>
+        </div>
+    </Sheet>
+  );
 };
 
+// ======================================================================
+// --- 5. MAIN APP COMPONENT ---
+// ======================================================================
 
-// --- MAIN APP COMPONENT ---
 export default function App() {
-  // --- STATE MANAGEMENT ---
+  const [theme, setTheme] = useTheme();
   const [products, setProducts] = useState<Product[]>([]);
   const [page, setPage] = useState(1);
-  const [limit] = useState(12);
   const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("");
   const [sort, setSort] = useState("id");
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 500);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [uiMessage, setUiMessage] = useState<string | null>(null);
   const [user, setUser] = useState<string | null>(localStorage.getItem("user"));
-  const [authModal, setAuthModal] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [wishlist, setWishlist] = useState<Product[]>([]);
   const [wishlistOpen, setWishlistOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   
-  // --- VOICE SEARCH STATE ---
   const recognitionRef = useRef<any>(null);
   const [micSupported, setMicSupported] = useState(false);
   const [listening, setListening] = useState(false);
-  
   const isLoggedIn = !!localStorage.getItem("accessToken");
 
+  const formatPrice = useCallback((p?: number) => `₹${(p || 0).toFixed(2)}`, []);
+
+  // --- DATA FETCHING & LOGIC ---
   const fetchCart = useCallback(async () => {
-    // If not logged in, the cart should be empty on the UI.
-    if (!isLoggedIn) {
-      setCart([]);
-      return;
-    }
+    if (!isLoggedIn) { setCart([]); return; }
     try {
       const res = await api.get('/cart');
-      if (!res.ok) throw new Error("Failed to fetch cart");
+      if (!res.ok) throw new Error();
       const data = await res.json();
-      
       const productDetails = await Promise.all(
-        data.items.map(async (item: { product_id: number; quantity: number; }) => {
-          const productRes = await fetch(`${API_BASE}/products/${item.product_id}`);
-          if(!productRes.ok) return null;
-          const productData = await productRes.json();
-          return {
-            ...item,
-            title: productData.title,
-            price: productData.price,
-            image: productData.thumbnail,
-          }
+        data.items.map(async (item: any) => {
+          try {
+            const productRes = await fetch(`${API_BASE}/products/${item.product_id}`);
+            if(!productRes.ok) return null;
+            const productData = await productRes.json();
+            return { ...item, title: productData.title, price: productData.price, image: productData.thumbnail };
+          } catch { return null; }
         })
       );
       setCart(productDetails.filter(Boolean));
-    } catch (e) {
-      console.warn("Could not fetch cart:", e);
-      showToast("Could not sync your cart.");
-    }
+    } catch (e) { toast.error("Could not sync your cart."); }
   }, [isLoggedIn]);
 
   const fetchWishlist = useCallback(async () => {
-    if (!isLoggedIn) {
-      setWishlist([]);
-      return;
-    }
+    if (!isLoggedIn) { setWishlist([]); return; }
     try {
       const res = await api.get('/wishlist');
-      if (!res.ok) throw new Error("Failed to fetch wishlist");
+      if (!res.ok) throw new Error();
       const data = await res.json();
       setWishlist(data.items || []);
-    } catch (e) {
-      console.warn("Could not fetch wishlist:", e);
-    }
+    } catch (e) { toast.error("Could not sync your wishlist."); }
   }, [isLoggedIn]);
 
-  const handleAuthChange = useCallback(() => {
-    setUser(localStorage.getItem("user"));
-    fetchCart();
-    fetchWishlist();
-  }, [fetchCart, fetchWishlist]);
-
-  // --- EFFECTS ---
-  useEffect(() => {
-    window.addEventListener("authChange", handleAuthChange);
-    return () => window.removeEventListener("authChange", handleAuthChange);
-  }, [handleAuthChange]);
-  
-  useEffect(() => {
-    fetchCategories();
-    fetchCart();
-    fetchWishlist();
-  }, [fetchCart, fetchWishlist]);
-
-  useEffect(() => { loadProducts(); }, [page, selectedCategory, sort, search]);
-
-  // Removed the useEffect that saves cart to localStorage as cart is now backend-driven.
-
-  // --- VOICE SEARCH INITIALIZATION ---
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        setMicSupported(false);
-        return;
-    }
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.interimResults = false;
-    rec.maxAlternatives = 1;
-    rec.continuous = false;
-    rec.onstart = () => setListening(true);
-    rec.onend = () => setListening(false);
-    rec.onerror = (e: any) => {
-        console.error("Speech recognition error:", e.error);
-        setListening(false);
-    };
-    rec.onresult = (e: any) => {
-        const text = Array.from(e.results).map((r: any) => r[0]?.transcript ?? "").join(" ").trim();
-        if (text) setSearch(text);
-    };
-    recognitionRef.current = rec;
-    setMicSupported(true);
-    return () => {
-        try { rec.abort(); } catch {}
-    };
-  }, []);
-
-  // --- DATA FETCHING & API LOGIC ---
-  async function fetchCategories() {
-    try {
-      const res = await fetch(`${API_BASE}/categories`);
-      if (!res.ok) throw new Error("Failed to load categories");
-      const data = await res.json();
-      setCategories(data.categories || []);
-    } catch (e) { console.warn(e); }
-  }
-
-  async function loadProducts() {
+  const loadProducts = useCallback(async () => {
     setLoading(true);
     try {
       let url: string;
-      if (search) {
-          url = `${API_BASE}/products/search?search_str=${encodeURIComponent(search)}&page=${page}&limit=${limit}`;
+      if (debouncedSearch) {
+        url = `${API_BASE}/products/search?search_str=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=12`;
       } else {
-          const q = new URLSearchParams();
-          q.set("page", String(page));
-          q.set("limit", String(limit));
-          if (selectedCategory) q.set("category", selectedCategory);
-          if (sort) q.set("sort", sort);
-          url = `${API_BASE}/products?${q.toString()}`;
+        const q = new URLSearchParams({ page: String(page), limit: String(12), sort });
+        if (selectedCategory) q.set("category", selectedCategory);
+        url = `${API_BASE}/products?${q.toString()}`;
       }
       const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch products");
       const data = await res.json();
       setProducts(data.products || []);
       setPages(data.pages || 1);
-      setTotal(data.total || 0);
     } catch (e) {
-      console.error(e);
-      showToast("Could not load products. Please check connection.");
+      toast.error("Could not load products.");
     } finally { setLoading(false); }
-  }
+  }, [page, selectedCategory, sort, debouncedSearch]);
 
-  // --- CART & CHECKOUT LOGIC ---
-  async function addToCart(product: Product, quantity = 1) {
-    if (product.stock !== undefined && product.stock <= 0) {
-        showToast("Out of stock");
-        return;
-    }
-
-    if (!isLoggedIn) {
-        setAuthModal(true);
-        showToast("Please log in to add items to your cart.");
-        return;
-    }
-
+  // --- HANDLERS ---
+  const addToCart = async (product: Product, quantity = 1) => {
+    if (product.stock <= 0) { toast.error("Out of stock"); return; }
+    if (!isLoggedIn) { setAuthModalOpen(true); return; }
     try {
       const res = await api.post('/cart/add', { product_id: product.id, quantity });
-      if(!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || "Failed to add item to cart");
-      }
+      if(!res.ok) throw new Error((await res.json()).detail || "Failed to add item");
       await fetchCart();
-      showToast(`${product.title} added to cart!`);
+      toast.success(`${product.title} added to cart!`);
       setCartOpen(true);
-    } catch (error: any) {
-      showToast(error.message);
-    }
-  }
-
-  async function changeQty(product_id: number, qty: number) {
-    if (qty < 1) return;
-
-    if (!isLoggedIn) {
-        setAuthModal(true);
-        showToast("Please log in to manage your cart.");
-        return;
-    }
-    
-    try {
-        const res = await api.post('/cart/update_quantity', { product_id: product_id, quantity: qty });
-        if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.detail || "Failed to update quantity");
-        }
-        await fetchCart();
-    } catch (error: any) {
-        showToast(error.message);
-    }
-  }
-
-  async function removeFromCart(product_id: number) {
-    if (!isLoggedIn) {
-        setAuthModal(true);
-        showToast("Please log in to manage your cart.");
-        return;
-    }
-
-    try {
-        const res = await api.post('/cart/remove', { product_id });
-        if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.detail || "Failed to remove item");
-        }
-        await fetchCart();
-        showToast("Item removed from cart.");
-    } catch (error: any) {
-        showToast(error.message);
-    }
-  }
-  
-  async function checkout() {
-    if (!cart.length) { 
-        showToast("Cart is empty"); 
-        return; 
-    }
-
-    if (!isLoggedIn) {
-        setAuthModal(true);
-        showToast("Please log in to proceed to checkout.");
-        return;
-    }
-
-    try {
-        const res = await api.post('/cart/checkout', {});
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `Checkout failed: ${res.status}`);
-        }
-        const body = await res.json();
-        if (body.url) {
-            window.location.href = body.url; // Redirect to Stripe for payment
-        } else {
-            showToast(`Order placed! Total: ₹${body.total}`);
-            setCart([]);
-            setCartOpen(false);
-        }
-    } catch (e: any) {
-        showToast(String(e.message || e));
-    }
-  }
-
-  // --- WISHLIST LOGIC ---
-  const toggleWishlist = async (product: Product) => {
-    if(!isLoggedIn) {
-        setAuthModal(true);
-        return;
-    }
-
-    const isInWishlist = wishlist.some(item => item.id === product.id);
-    const endpoint = isInWishlist ? '/wishlist/remove' : '/wishlist/add';
-    
-    try {
-        const res = await api.post(endpoint, { product_id: product.id });
-        if (!res.ok) {
-          const errorData = await res.json();
-          throw new Error(errorData.detail || "Failed to update wishlist");
-        }
-        
-        await fetchWishlist(); // Re-fetch wishlist for consistency
-        if (isInWishlist) {
-            showToast(`${product.title} removed from wishlist.`);
-        } else {
-            showToast(`${product.title} added to wishlist.`);
-        }
-    } catch(error: any) {
-        showToast(error.message);
-    }
+    } catch (error: any) { toast.error(error.message); }
   };
 
-  // --- AUTHENTICATION LOGIC ---
-  function logout() {
-    api.logout();
-    setCart([]);
-    setWishlist([]);
-    showToast("You've been logged out.");
-  }
+  const changeQty = async (product_id: number, qty: number) => {
+    if (qty < 1) return;
+    try {
+      const res = await api.post('/cart/update_quantity', { product_id, quantity: qty });
+      if (!res.ok) throw new Error((await res.json()).detail || "Failed to update quantity");
+      await fetchCart();
+    } catch (error: any) { toast.error(error.message); }
+  };
 
-  async function handleAuth(mode: 'login' | 'register', email: string, username: string, password: string) {
+  const removeFromCart = async (product_id: number) => {
+    try {
+      const res = await api.post('/cart/remove', { product_id });
+      if (!res.ok) throw new Error((await res.json()).detail || "Failed to remove item");
+      await fetchCart();
+      toast.info("Item removed from cart.");
+    } catch (error: any) { toast.error(error.message); }
+  };
+
+  const checkout = async () => {
+    if (!cart.length) { toast.warning("Cart is empty"); return; }
+    try {
+      const res = await api.post('/cart/checkout', {});
+      if (!res.ok) throw new Error((await res.json()).detail || "Checkout failed");
+      const body = await res.json();
+      if (body.url) { window.location.href = body.url; }
+      else { toast.success(`Order placed! Total: ${formatPrice(body.total)}`); fetchCart(); setCartOpen(false); }
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  const toggleWishlist = async (product: Product) => {
+    if(!isLoggedIn) { setAuthModalOpen(true); return; }
+    const isInWishlist = wishlist.some(item => item.id === product.id);
+    try {
+      const res = await api.post(isInWishlist ? '/wishlist/remove' : '/wishlist/add', { product_id: product.id });
+      if (!res.ok) throw new Error((await res.json()).detail || "Failed to update wishlist");
+      await fetchWishlist();
+      toast.success(isInWishlist ? "Removed from wishlist" : "Added to wishlist!");
+    } catch(error: any) { toast.error(error.message); }
+  };
+
+  const handleAuth = async (mode: 'login' | 'register', email: string, username: string, password: string) => {
     try {
       const url = `${API_BASE}/users/${mode}`;
       const body = mode === "login" ? { email, password } : { email, username, password };
-      const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-      });
-      if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || "Authentication failed");
-      }
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json()).detail || "Authentication failed");
       const data = await res.json();
       if (mode === "login") {
-          localStorage.setItem("accessToken", data.access_token);
-          localStorage.setItem("refreshToken", data.refresh_token);
-          localStorage.setItem("user", username || email);
-          window.dispatchEvent(new Event("authChange"));
-          showToast("Login successful!");
-          setAuthModal(false);
+        localStorage.setItem("accessToken", data.access_token);
+        localStorage.setItem("refreshToken", data.refresh_token);
+        localStorage.setItem("user", data.username || email);
+        window.dispatchEvent(new Event("authChange"));
+        toast.success("Login successful!");
+        setAuthModalOpen(false);
       } else {
-          showToast("Registered successfully! Please login.");
+        toast.info("Registered successfully! Please login.");
       }
-    } catch (e: any) {
-      showToast(e.message);
-    }
-  }
-  
-  // --- UI HELPERS ---
-  const formatPrice = (p?: number) => `₹${(p || 0).toFixed(2)}`;
-  
-  function showToast(message: string) {
-    setUiMessage(message);
-    setTimeout(() => setUiMessage(null), 3000);
-  }
-  
-  const toggleMic = () => {
-    const rec = recognitionRef.current;
-    if (!rec) return;
-    if (listening) rec.stop();
-    else {
-      try { rec.start(); } catch {}
-    }
+    } catch (e: any) { toast.error(e.message); }
   };
   
   const handleCategorySelect = (category: string) => {
-    if (selectedCategory === category) {
-      setSelectedCategory("");
-    } else {
-      setSelectedCategory(category); 
-    }
-    setPage(1);
+    setSelectedCategory(cat => cat === category ? "" : category);
     document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const toggleMic = () => {
+    if (!recognitionRef.current) return;
+    if (listening) { recognitionRef.current.stop(); }
+    else { try { recognitionRef.current.start(); } catch {} }
+  };
+
+  // --- EFFECTS ---
+  useEffect(() => {
+    const handleAuthChange = () => { setUser(localStorage.getItem("user")); fetchCart(); fetchWishlist(); };
+    window.addEventListener("authChange", handleAuthChange);
+    return () => window.removeEventListener("authChange", handleAuthChange);
+  }, [fetchCart, fetchWishlist]);
+  
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/categories`);
+        setCategories((await res.json()).categories || []);
+      } catch (e) { console.warn(e); }
+      await fetchCart();
+      await fetchWishlist();
+    };
+    fetchInitialData();
+  }, [fetchCart, fetchWishlist]);
+
+  useEffect(() => { loadProducts(); }, [loadProducts]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, selectedCategory, sort]);
+  
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const rec = new SpeechRecognition();
+    rec.lang = "en-US";
+    rec.onstart = () => setListening(true);
+    rec.onend = () => setListening(false);
+    rec.onerror = (e: any) => console.error(e.error);
+    rec.onresult = (e: any) => {
+      const text = Array.from(e.results).map((r: any) => r[0]?.transcript ?? "").join(" ").trim();
+      if (text) setSearch(text);
+    };
+    recognitionRef.current = rec;
+    setMicSupported(true);
+    return () => { try { rec.abort(); } catch {} };
+  }, []);
 
   // --- RENDER ---
   return (
     <>
-      <style>{`
-        /* ... (styles remain the same) ... */
-      `}</style>
-      <div className="min-h-screen bg-white text-gray-800 font-sans">
-        <Header
-          user={user}
-          onLoginClick={() => setAuthModal(true)}
-          onLogoutClick={logout}
-          onCartClick={() => setCartOpen(true)}
-          onWishlistClick={() => setWishlistOpen(true)}
-          cartItemCount={cart.length}
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }`}</style>
+      <Toaster position="bottom-right" richColors />
+      <div className="min-h-screen bg-gray-50 text-gray-800 dark:bg-gray-950 dark:text-gray-200 font-sans transition-colors duration-300">
+        {/* --- CHANGE 3: Pass wishlistItemCount prop --- */}
+        <Header 
+            user={user} 
+            onLoginClick={() => setAuthModalOpen(true)} 
+            onLogoutClick={api.logout} 
+            onCartClick={() => setCartOpen(true)} 
+            onWishlistClick={() => setWishlistOpen(true)} 
+            onProfileClick={() => setProfileOpen(true)}
+            cartItemCount={cart.length} 
+            wishlistItemCount={wishlist.length}
+            theme={theme} 
+            setTheme={setTheme} 
         />
-        
         <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
           <Slider />
-          <CategoryCarousel 
-            categories={categories}
-            onCategorySelect={handleCategorySelect}
-            selectedCategory={selectedCategory}
-          />
+          <CategoryCarousel categories={categories} onCategorySelect={handleCategorySelect} selectedCategory={selectedCategory} />
           <div id="products-section" className="py-12 max-w-7xl mx-auto">
-            <h2 className="text-3xl font-bold text-center mb-2">Our Products</h2>
-            <p className="text-center text-gray-500 mb-8">
-              {selectedCategory ? `Showing products in "${selectedCategory.replace(/-/g, ' ')}"` : 'Discover our curated selection of high-quality products.'}
-            </p>
-            <ProductFilters
-              search={search}
-              setSearch={setSearch}
-              toggleMic={toggleMic}
-              listening={listening}
-              micSupported={micSupported}
-              categories={categories}
-              selectedCategory={selectedCategory}
-              setSelectedCategory={(c: string) => {setSelectedCategory(c); setPage(1);}}
-              sort={sort}
-              setSort={(s: string) => {setSort(s); setPage(1);}}
-            />
-            {loading ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
-                {Array.from({ length: 8 }).map((_, i) => <ProductCardSkeleton key={i} />)}
-              </div>
-            ) : products.length === 0 ? (
-              <div className="text-center py-16 bg-gray-50 rounded-lg mt-8">
-                  <h3 className="text-xl font-semibold">No Products Found</h3>
-                  <p className="text-gray-500 mt-2">Try adjusting your search or filters.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
-                {products.map(p => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    onViewClick={() => setSelectedProduct(p)}
-                    onAddClick={() => addToCart(p)}
-                    onWishlistClick={() => toggleWishlist(p)}
-                    isInWishlist={wishlist.some(item => item.id === p.id)}
-                    formatPrice={formatPrice}
-                  />
-                ))}
-              </div>
-            )}
-            <Pagination
-              page={page}
-              pages={pages}
-              onPageChange={setPage}
-            />
+            <h2 className="text-3xl font-bold text-center mb-8 dark:text-white">Our Products</h2>
+            <ProductFilters search={search} setSearch={setSearch} toggleMic={toggleMic} listening={listening} micSupported={micSupported} sort={sort} setSort={setSort} />
+            
+            <motion.div
+              layout
+              className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8"
+            >
+              <AnimatePresence>
+                {loading ? (
+                    Array.from({ length: 12 }).map((_, i) => <ProductCardSkeleton key={i} />)
+                ) : products.length === 0 ? (
+                  <motion.div initial={{ opacity: 0}} animate={{ opacity: 1}} className="col-span-full text-center py-16 bg-white dark:bg-gray-900 rounded-lg mt-8 border dark:border-gray-800"><h3 className="text-xl font-semibold">No Products Found</h3><p className="text-gray-500 mt-2">Try adjusting your search or filters.</p></motion.div>
+                ) : (
+                    products.map(p => (
+                        <motion.div layout key={p.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
+                            <ProductCard product={p} onViewClick={() => setSelectedProduct(p)} onAddClick={() => addToCart(p)} onWishlistClick={() => toggleWishlist(p)} isInWishlist={wishlist.some(item => item.id === p.id)} formatPrice={formatPrice} />
+                        </motion.div>
+                    ))
+                )}
+              </AnimatePresence>
+            </motion.div>
+
+            {pages > 1 && <Pagination page={page} pages={pages} onPageChange={setPage} />}
           </div>
-          <div className="max-w-7xl mx-auto">
-              <BrandLogos/>
-          </div>
+          <BrandLogos/>
         </main>
         <Footer />
-        {selectedProduct && (
-          <ProductDetailDialog
-            product={selectedProduct}
-            onClose={() => setSelectedProduct(null)}
-            onAddToCart={addToCart}
-            formatPrice={formatPrice}
-          />
-        )}
-        <CartSheet
-          isOpen={cartOpen}
-          onClose={() => setCartOpen(false)}
-          cart={cart}
-          changeQty={changeQty}
-          removeFromCart={removeFromCart}
-          checkout={checkout}
-          formatPrice={formatPrice}
+
+        {selectedProduct && <ProductDetailDialog product={selectedProduct} onClose={() => setSelectedProduct(null)} onAddToCart={addToCart} formatPrice={formatPrice} onSelectRelated={setSelectedProduct} />}
+        {authModalOpen && <AuthDialog onClose={() => setAuthModalOpen(false)} handleAuth={handleAuth} />}
+        <CartSheet isOpen={cartOpen} onClose={() => setCartOpen(false)} cart={cart} changeQty={changeQty} removeFromCart={removeFromCart} checkout={checkout} formatPrice={formatPrice} />
+        <WishlistSheet isOpen={wishlistOpen} onClose={() => setWishlistOpen(false)} wishlist={wishlist} onAddToCart={addToCart} onRemoveFromWishlist={toggleWishlist} formatPrice={formatPrice} />
+        <ProfileSheet 
+            isOpen={profileOpen} 
+            onClose={() => setProfileOpen(false)} 
+            user={user} 
+            onLogoutClick={api.logout} 
+            onWishlistClick={() => { setProfileOpen(false); setWishlistOpen(true); }}
         />
-        <WishlistSheet
-          isOpen={wishlistOpen}
-          onClose={() => setWishlistOpen(false)}
-          wishlist={wishlist}
-          onAddToCart={addToCart}
-          onRemoveFromWishlist={toggleWishlist}
-          formatPrice={formatPrice}
-        />
-        {authModal && <AuthDialog onClose={() => setAuthModal(false)} handleAuth={handleAuth} />}
-        {uiMessage && <Toast message={uiMessage} onDismiss={() => setUiMessage(null)} />}
       </div>
     </>
   );
 }
-
-// --- SUB-COMPONENTS ---
-// No changes needed for sub-components (Header, Slider, etc.), so they are omitted for brevity.
-// You can keep your existing sub-component code.
-// The only change is in the `changeQty` input in `CartSheet` to use the new async function.
-// Make sure to pass the updated `changeQty` and `removeFromCart` functions to `CartSheet`.
