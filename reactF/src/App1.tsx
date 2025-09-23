@@ -802,6 +802,7 @@ export default function App() {
             onLogoutClick={api.logout} 
             onWishlistClick={() => { setProfileOpen(false); setWishlistOpen(true); }}
         />
+        {/* {} */}
       </div>
     </>
   );
