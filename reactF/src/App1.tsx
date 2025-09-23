@@ -1,377 +1,13 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Search, Mic, X, User, ShoppingCart, Menu, Minus, Plus, Star, Heart } from 'lucide-react';
-import "./App.css"
-// --- TYPE DEFINITIONS ---
-interface Product {
-  id: number;
-  title: string;
-  description: string;
-  price: number;
-  rating: number;
-  stock: number;
-  brand: string;
-  category: string;
-  thumbnail: string;
-  images: string[];
-}
-
-interface CartItem {
-  product_id: number;
-  title:string;
-  price: number;
-  image: string;
-  quantity: number;
-}
-
-// --- API BASE URL ---
-const API_BASE = "https://backfinal-7pi0.onrender.com";
-
-// --- MAIN APP COMPONENT ---
-export default function App() {
-  // --- STATE MANAGEMENT ---
-  const [products, setProducts] = useState<Product[]>([]);
-  const [page, setPage] = useState(1);
-  const [limit] = useState(12);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState("");
-  const [sort, setSort] = useState("id");
-  const [search, setSearch] = useState("");
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    try { return JSON.parse(localStorage.getItem("cart") || "[]"); }
-    catch (e) { return []; }
-  });
-  const [uiMessage, setUiMessage] = useState<string | null>(null);
-  const [token, setToken] = useState<string>(() => localStorage.getItem("token") || "");
-  const [user, setUser] = useState<string>(() => localStorage.getItem("user") || "");
-  const [authModal, setAuthModal] = useState(false);
-  const [cartOpen, setCartOpen] = useState(false);
-  
-  // --- VOICE SEARCH STATE ---
-  const recognitionRef = useRef<any>(null);
-  const [micSupported, setMicSupported] = useState(false);
-  const [listening, setListening] = useState(false);
-
-  // --- EFFECTS ---
-  useEffect(() => { fetchCategories(); }, []);
-  useEffect(() => { loadProducts(); }, [page, selectedCategory, sort, search]);
-  useEffect(() => { localStorage.setItem("cart", JSON.stringify(cart)); }, [cart]);
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem("token", token);
-      if (user) localStorage.setItem("user", user);
-    } else {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      setUser("");
-    }
-  }, [token, user]);
-  
-  // --- VOICE SEARCH INITIALIZATION ---
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        setMicSupported(false);
-        return;
-    }
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.interimResults = false;
-    rec.maxAlternatives = 1;
-    rec.continuous = false;
-
-    rec.onstart = () => setListening(true);
-    rec.onend = () => setListening(false);
-    rec.onerror = (e: any) => {
-        console.error("Speech recognition error:", e.error);
-        setListening(false);
-    };
-    rec.onresult = (e: any) => {
-        const text = Array.from(e.results).map((r: any) => r[0]?.transcript ?? "").join(" ").trim();
-        if (text) setSearch(text);
-    };
-
-    recognitionRef.current = rec;
-    setMicSupported(true);
-
-    return () => {
-        try { rec.abort(); } catch {}
-    };
-  }, []);
-
-  // --- DATA FETCHING & API LOGIC ---
-  async function fetchCategories() {
-    try {
-      const res = await fetch(`${API_BASE}/categories`);
-      if (!res.ok) throw new Error("Failed to load categories");
-      const data = await res.json();
-      setCategories(data.categories || []);
-    } catch (e) { console.warn(e); }
-  }
-
-  async function loadProducts() {
-    setLoading(true);
-    try {
-      let url: string;
-      if (search) {
-          url = `${API_BASE}/products/search?search_str=${encodeURIComponent(search)}&page=${page}&limit=${limit}`;
-      } else {
-          const q = new URLSearchParams();
-          q.set("page", String(page));
-          q.set("limit", String(limit));
-          if (selectedCategory) q.set("category", selectedCategory);
-          if (sort) q.set("sort", sort);
-          url = `${API_BASE}/products?${q.toString()}`;
-      }
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch products");
-      const data = await res.json();
-      setProducts(data.products || []);
-      setPages(data.pages || 1);
-      setTotal(data.total || 0);
-    } catch (e) {
-      console.error(e);
-      showToast("Could not load products. Please check connection.");
-    } finally { setLoading(false); }
-  }
-
-  // --- CART & CHECKOUT LOGIC ---
-  function addToCart(product: Product, quantity = 1) {
-    if (product.stock !== undefined && product.stock <= 0) {
-        showToast("Out of stock");
-        return;
-    }
-    setCart(prev => {
-        const next = [...prev];
-        const idx = next.findIndex(x => x.product_id === product.id);
-        if (idx >= 0) {
-            next[idx].quantity += quantity;
-        } else {
-            next.push({ 
-                product_id: product.id, 
-                title: product.title, 
-                price: product.price, 
-                image: product.thumbnail || (product.images && product.images[0]) || "", 
-                quantity 
-            });
-        }
-        return next;
-    });
-    showToast(`${product.title} added to cart!`);
-    setCartOpen(true);
-  }
-
-  function changeQty(product_id: number, qty: number) {
-    setCart(prev => prev.map(it => it.product_id === product_id ? { ...it, quantity: Math.max(1, qty) } : it));
-  }
-
-  function removeFromCart(product_id: number) {
-    setCart(prev => prev.filter(it => it.product_id !== product_id));
-  }
-  
-  async function checkout() {
-    if (!cart.length) { showToast("Cart is empty"); return; }
-    if (!token) {
-        showToast(`Simulated checkout: Total ₹${(cart.reduce((s, i) => s + i.price * i.quantity, 0)).toFixed(2)}`);
-        setCart([]);
-        setCartOpen(false);
-        return;
-    }
-    try {
-        const res = await fetch(`${API_BASE}/cart/checkout`, { 
-            method: "POST", 
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } 
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `Checkout failed: ${res.status}`);
-        }
-        const body = await res.json();
-        showToast(`Order placed successfully! Total: ₹${body.total}`);
-        setCart([]);
-        setCartOpen(false);
-    } catch (e: any) {
-        showToast(String(e.message || e));
-    }
-  }
-
-  // --- AUTHENTICATION LOGIC ---
-  function logout() {
-    setToken("");
-    setUser("");
-    showToast("You've been logged out.");
-  }
-
-  async function handleAuth(mode: 'login' | 'register', email: string, username: string, password: string) {
-    try {
-      const url = `${API_BASE}/users/${mode}`;
-      const body = mode === "login" ? { email, password } : { email, username, password };
-      const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-      });
-      if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || "Authentication failed");
-      }
-      const data = await res.json();
-      if (mode === "login") {
-          setToken(data.access_token);
-          setUser(data.username || email);
-          showToast("Login successful!");
-          setAuthModal(false);
-      } else {
-          showToast("Registered successfully! Please login.");
-      }
-    } catch (e: any) {
-      showToast(e.message);
-    }
-  }
-  
-  // --- UI HELPERS ---
-  const formatPrice = (p?: number) => `₹${(p || 0).toFixed(2)}`;
-  
-  function showToast(message: string) {
-    setUiMessage(message);
-    setTimeout(() => setUiMessage(null), 3000);
-  }
-  
-  const toggleMic = () => {
-    const rec = recognitionRef.current;
-    if (!rec) return;
-    if (listening) rec.stop();
-    else {
-      try { rec.start(); } catch {}
-    }
-  };
-  
-  const handleCategorySelect = (category: string) => {
-    // If the same category is clicked again, deselect it
-    if (selectedCategory === category) {
-      setSelectedCategory("");
-    } else {
-      setSelectedCategory(category); 
-    }
-    setPage(1);
-    document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth' });
-  };
 
 
-  // --- RENDER ---
-  return (
-    <div className="min-h-screen bg-white text-gray-800 font-sans">
-      <Header
-        user={user}
-        onLoginClick={() => setAuthModal(true)}
-        onLogoutClick={logout}
-        onCartClick={() => setCartOpen(true)}
-        cartItemCount={cart.length}
-      />
-      
-      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
-        <Slider />
-        
-        <CategoryCarousel 
-          categories={categories}
-          onCategorySelect={handleCategorySelect}
-          selectedCategory={selectedCategory}
-        />
-        
-        <div id="products-section" className="py-12 max-w-7xl mx-auto">
-           <h2 className="text-3xl font-bold text-center mb-2">Our Products</h2>
-           <p className="text-center text-gray-500 mb-8">
-             {selectedCategory ? `Showing products in "${selectedCategory.replace(/-/g, ' ')}"` : 'Discover our curated selection of high-quality products.'}
-           </p>
-           
-           <ProductFilters
-             search={search}
-             setSearch={setSearch}
-             toggleMic={toggleMic}
-             listening={listening}
-             micSupported={micSupported}
-             categories={categories}
-             selectedCategory={selectedCategory}
-             setSelectedCategory={(c: string) => {setSelectedCategory(c); setPage(1);}}
-             sort={sort}
-             setSort={(s: string) => {setSort(s); setPage(1);}}
-           />
+// // --- SUB-COMPONENTS ---
 
-           {loading ? (
-             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
-               {Array.from({ length: 8 }).map((_, i) => <ProductCardSkeleton key={i} />)}
-             </div>
-           ) : products.length === 0 ? (
-             <div className="text-center py-16 bg-gray-50 rounded-lg mt-8">
-                <h3 className="text-xl font-semibold">No Products Found</h3>
-                <p className="text-gray-500 mt-2">Try adjusting your search or filters.</p>
-             </div>
-           ) : (
-             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
-               {products.map(p => (
-                 <ProductCard
-                   key={p.id}
-                   product={p}
-                   onViewClick={() => setSelectedProduct(p)}
-                   onAddClick={() => addToCart(p)}
-                   formatPrice={formatPrice}
-                 />
-               ))}
-             </div>
-           )}
-
-           <Pagination
-             page={page}
-             pages={pages}
-             onPageChange={setPage}
-           />
-        </div>
-
-        <div className="max-w-7xl mx-auto">
-            <BrandLogos/>
-        </div>
-      </main>
-
-      <Footer />
-
-      {/* Modals & Drawers */}
-      {selectedProduct && (
-        <ProductDetailDialog
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-          onAddToCart={addToCart}
-          formatPrice={formatPrice}
-        />
-      )}
-
-      <CartSheet
-        isOpen={cartOpen}
-        onClose={() => setCartOpen(false)}
-        cart={cart}
-        changeQty={changeQty}
-        removeFromCart={removeFromCart}
-        checkout={checkout}
-        formatPrice={formatPrice}
-      />
-      
-      {authModal && <AuthDialog onClose={() => setAuthModal(false)} handleAuth={handleAuth} />}
-      
-      {uiMessage && <Toast message={uiMessage} onDismiss={() => setUiMessage(null)} />}
-    </div>
-  );
-}
-
-
-// --- SUB-COMPONENTS ---
-
-const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, cartItemCount }: {
-  user: string;
+const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, onWishlistClick, cartItemCount }: {
+  user: string | null;
   onLoginClick: () => void;
   onLogoutClick: () => void;
   onCartClick: () => void;
+  onWishlistClick: () => void;
   cartItemCount: number;
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -389,7 +25,7 @@ const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, cartItemCount 
               <a key={link} href="#" className="text-gray-600 hover:text-black transition-colors duration-200">{link}</a>
             ))}
           </nav>
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
              {user ? (
                <div className="flex items-center gap-3">
                  <div className="w-10 h-10 flex items-center justify-center bg-black text-white font-bold rounded-full text-lg">
@@ -400,6 +36,9 @@ const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, cartItemCount 
              ) : (
                 <button onClick={onLoginClick} className="hidden md:block bg-black text-white px-5 py-2 rounded-lg font-semibold hover:bg-gray-800 transition-transform hover:scale-105">SIGN UP</button>
              )}
+            <button onClick={onWishlistClick} className="relative p-2 rounded-full hover:bg-gray-100">
+                <Heart className="h-6 w-6"/>
+            </button>
              <button onClick={onCartClick} className="relative p-2 rounded-full hover:bg-gray-100">
                 <ShoppingCart className="h-6 w-6"/>
                 {cartItemCount > 0 && <span className="absolute top-0 right-0 block h-5 w-5 rounded-full bg-yellow-400 text-black text-xs font-bold text-center leading-5">{cartItemCount}</span>}
@@ -422,7 +61,6 @@ const Header = ({ user, onLoginClick, onLogoutClick, onCartClick, cartItemCount 
   )
 };
 
-// --- REVISED SLIDER COMPONENT ---
 const slides = [
   { id: 1, title: "Summer Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1926769/pexels-photo-1926769.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-yellow-50 to-pink-50" },
   { id: 2, title: "Winter Sale Collections", description: "Sale! Up to 50% off!", img: "https://images.pexels.com/photos/1021693/pexels-photo-1021693.jpeg?auto=compress&cs=tinysrgb", bg: "bg-gradient-to-r from-pink-50 to-blue-50" },
@@ -481,8 +119,6 @@ const Slider = () => {
   );
 };
 
-
-// --- UPDATED CATEGORY COMPONENT (NO CAROUSEL) ---
 const CategoryCarousel = ({ categories, onCategorySelect, selectedCategory }: {
   categories: string[];
   onCategorySelect: (category: string) => void;
@@ -497,7 +133,6 @@ const CategoryCarousel = ({ categories, onCategorySelect, selectedCategory }: {
             <h2 className="text-3xl font-bold text-center mb-8">Explore Our Collections</h2>
             <div className="relative w-full">
                 <div className="flex p-4 gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                    {/* This parent div will manage the hover effect for all children */}
                     <div className="flex gap-5 group">
                         {categories.map((category) => (
                             <div
@@ -567,18 +202,20 @@ const ProductFilters = ({ search, setSearch, toggleMic, listening, micSupported,
   </div>
 );
 
-const ProductCard = ({ product, onViewClick, onAddClick, formatPrice }: {
+const ProductCard = ({ product, onViewClick, onAddClick, onWishlistClick, isInWishlist, formatPrice }: {
   product: Product;
   onViewClick: () => void;
   onAddClick: () => void;
+  onWishlistClick: () => void;
+  isInWishlist: boolean;
   formatPrice: (p: number) => string;
 }) => (
   <div className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col group transition-all duration-300 hover:shadow-2xl hover:-translate-y-2">
     <div className="relative aspect-square mb-4 overflow-hidden rounded-xl">
        <img src={product.thumbnail} alt={product.title} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-110" 
        onError={(e:any) => e.target.src=`https://placehold.co/300x300/e2e8f0/334155?text=${product.title.split(' ').join('+')}`}/>
-       <button className="absolute top-2 right-2 bg-white/70 backdrop-blur-sm p-2 rounded-full text-gray-600 hover:text-red-500 transition-colors">
-         <Heart className="h-5 w-5"/>
+       <button onClick={onWishlistClick} className="absolute top-2 right-2 bg-white/70 backdrop-blur-sm p-2 rounded-full text-gray-600 hover:text-red-500 transition-colors">
+         <Heart className={`h-5 w-5 ${isInWishlist ? 'text-red-500 fill-current' : ''}`}/>
        </button>
     </div>
     <div className="flex-1 mb-4">
@@ -788,6 +425,54 @@ const CartSheet = ({ isOpen, onClose, cart, changeQty, removeFromCart, checkout,
     </div>
 );
 
+const WishlistSheet = ({ isOpen, onClose, wishlist, onAddToCart, onRemoveFromWishlist, formatPrice }: {
+  isOpen: boolean;
+  onClose: () => void;
+  wishlist: Product[];
+  onAddToCart: (product: Product) => void;
+  onRemoveFromWishlist: (product: Product) => void;
+  formatPrice: (p: number) => string;
+}) => (
+    <div className={`fixed inset-0 z-50 transition-all duration-300 ${isOpen ? 'bg-black/40' : 'bg-transparent pointer-events-none'}`}>
+        <div 
+          onClick={onClose} 
+          className={`absolute inset-0 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
+        />
+        <div className={`absolute top-0 right-0 h-full w-full max-w-md bg-white shadow-xl transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between p-6 border-b">
+                    <h3 className="text-xl font-bold">Your Wishlist</h3>
+                    <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100"><X size={20}/></button>
+                </div>
+                {wishlist.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
+                        <Heart size={48} className="text-gray-300 mb-4"/>
+                        <h4 className="font-semibold text-lg">Your wishlist is empty</h4>
+                        <p className="text-gray-500">Add your favorite items to see them here.</p>
+                    </div>
+                ) : (
+                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                        {wishlist.map(product => (
+                            <div key={product.id} className="flex items-start gap-4">
+                                <img src={product.thumbnail} alt={product.title} className="w-20 h-20 object-cover rounded-lg"/>
+                                <div className="flex-1">
+                                    <h4 className="font-semibold">{product.title}</h4>
+                                    <p className="text-sm text-gray-500">{formatPrice(product.price)}</p>
+                                    <div className="flex items-center gap-4 mt-2">
+                                        <button onClick={() => { onAddToCart(product); onRemoveFromWishlist(product); }} className="text-sm text-blue-500 hover:underline">Move to Cart</button>
+                                        <button onClick={() => onRemoveFromWishlist(product)} className="text-sm text-red-500 hover:underline">Remove</button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    </div>
+);
+
+
 const AuthDialog = ({ onClose, handleAuth }: { onClose: () => void; handleAuth: (m: 'login' | 'register', e: string, u: string, p: string) => Promise<void> }) => {
     const [mode, setMode] = useState<'login' | 'register'>("login");
     const [email, setEmail] = useState("");
@@ -831,3 +516,566 @@ const Toast = ({ message, onDismiss }: { message: string; onDismiss: () => void;
         <button onClick={onDismiss} className="ml-4 font-bold opacity-70 hover:opacity-100">×</button>
     </div>
 );
+
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { Search, Mic, X, User, ShoppingCart, Menu, Minus, Plus, Star, Heart } from 'lucide-react';
+
+// --- TYPE DEFINITIONS ---
+interface Product {
+  id: number;
+  title: string;
+  description: string;
+  price: number;
+  rating: number;
+  stock: number;
+  brand: string;
+  category: string;
+  thumbnail: string;
+  images: string[];
+}
+
+interface CartItem {
+  product_id: number;
+  title:string;
+  price: number;
+  image: string;
+  quantity: number;
+}
+
+// --- API BASE URL ---
+const API_BASE = "https://backfinal-7pi0.onrender.com";
+// const API_BASE = "http://localhost:8000";
+
+// --- API Wrapper ---
+const api = {
+  async get(endpoint: string) {
+    return this.request('GET', endpoint);
+  },
+  async post(endpoint: string, body: any) {
+    return this.request('POST', endpoint, body);
+  },
+  async request(method: string, endpoint: string, body: any = null) {
+    let accessToken = localStorage.getItem("accessToken");
+
+    const makeRequest = async (token: string | null) => {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const options: RequestInit = { method, headers };
+      if (body) {
+        options.body = JSON.stringify(body);
+      }
+      return fetch(`${API_BASE}${endpoint}`, options);
+    };
+
+    let res = await makeRequest(accessToken);
+
+    if (res.status === 401) {
+      const refreshToken = localStorage.getItem("refreshToken");
+      if (!refreshToken) {
+        this.logout();
+        throw new Error("Session expired. Please log in again.");
+      }
+
+      try {
+        const refreshRes = await fetch(`${API_BASE}/users/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+
+        if (!refreshRes.ok) {
+          this.logout();
+          throw new Error("Session expired. Please log in again.");
+        }
+
+        const data = await refreshRes.json();
+        localStorage.setItem("accessToken", data.access_token);
+        localStorage.setItem("refreshToken", data.refresh_token);
+
+        res = await makeRequest(data.access_token);
+
+      } catch (error) {
+        this.logout();
+        throw new Error("Session expired. Please log in again.");
+      }
+    }
+
+    return res;
+  },
+  logout() {
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("refreshToken");
+    localStorage.removeItem("user");
+    window.dispatchEvent(new Event("authChange"));
+  }
+};
+
+
+// --- MAIN APP COMPONENT ---
+export default function App() {
+  // --- STATE MANAGEMENT ---
+  const [products, setProducts] = useState<Product[]>([]);
+  const [page, setPage] = useState(1);
+  const [limit] = useState(12);
+  const [pages, setPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [sort, setSort] = useState("id");
+  const [search, setSearch] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [uiMessage, setUiMessage] = useState<string | null>(null);
+  const [user, setUser] = useState<string | null>(localStorage.getItem("user"));
+  const [authModal, setAuthModal] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [wishlist, setWishlist] = useState<Product[]>([]);
+  const [wishlistOpen, setWishlistOpen] = useState(false);
+  
+  // --- VOICE SEARCH STATE ---
+  const recognitionRef = useRef<any>(null);
+  const [micSupported, setMicSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  
+  const isLoggedIn = !!localStorage.getItem("accessToken");
+
+  const fetchCart = useCallback(async () => {
+    // If not logged in, the cart should be empty on the UI.
+    if (!isLoggedIn) {
+      setCart([]);
+      return;
+    }
+    try {
+      const res = await api.get('/cart');
+      if (!res.ok) throw new Error("Failed to fetch cart");
+      const data = await res.json();
+      
+      const productDetails = await Promise.all(
+        data.items.map(async (item: { product_id: number; quantity: number; }) => {
+          const productRes = await fetch(`${API_BASE}/products/${item.product_id}`);
+          if(!productRes.ok) return null;
+          const productData = await productRes.json();
+          return {
+            ...item,
+            title: productData.title,
+            price: productData.price,
+            image: productData.thumbnail,
+          }
+        })
+      );
+      setCart(productDetails.filter(Boolean));
+    } catch (e) {
+      console.warn("Could not fetch cart:", e);
+      showToast("Could not sync your cart.");
+    }
+  }, [isLoggedIn]);
+
+  const fetchWishlist = useCallback(async () => {
+    if (!isLoggedIn) {
+      setWishlist([]);
+      return;
+    }
+    try {
+      const res = await api.get('/wishlist');
+      if (!res.ok) throw new Error("Failed to fetch wishlist");
+      const data = await res.json();
+      setWishlist(data.items || []);
+    } catch (e) {
+      console.warn("Could not fetch wishlist:", e);
+    }
+  }, [isLoggedIn]);
+
+  const handleAuthChange = useCallback(() => {
+    setUser(localStorage.getItem("user"));
+    fetchCart();
+    fetchWishlist();
+  }, [fetchCart, fetchWishlist]);
+
+  // --- EFFECTS ---
+  useEffect(() => {
+    window.addEventListener("authChange", handleAuthChange);
+    return () => window.removeEventListener("authChange", handleAuthChange);
+  }, [handleAuthChange]);
+  
+  useEffect(() => {
+    fetchCategories();
+    fetchCart();
+    fetchWishlist();
+  }, [fetchCart, fetchWishlist]);
+
+  useEffect(() => { loadProducts(); }, [page, selectedCategory, sort, search]);
+
+  // Removed the useEffect that saves cart to localStorage as cart is now backend-driven.
+
+  // --- VOICE SEARCH INITIALIZATION ---
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        setMicSupported(false);
+        return;
+    }
+    const rec = new SpeechRecognition();
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.continuous = false;
+    rec.onstart = () => setListening(true);
+    rec.onend = () => setListening(false);
+    rec.onerror = (e: any) => {
+        console.error("Speech recognition error:", e.error);
+        setListening(false);
+    };
+    rec.onresult = (e: any) => {
+        const text = Array.from(e.results).map((r: any) => r[0]?.transcript ?? "").join(" ").trim();
+        if (text) setSearch(text);
+    };
+    recognitionRef.current = rec;
+    setMicSupported(true);
+    return () => {
+        try { rec.abort(); } catch {}
+    };
+  }, []);
+
+  // --- DATA FETCHING & API LOGIC ---
+  async function fetchCategories() {
+    try {
+      const res = await fetch(`${API_BASE}/categories`);
+      if (!res.ok) throw new Error("Failed to load categories");
+      const data = await res.json();
+      setCategories(data.categories || []);
+    } catch (e) { console.warn(e); }
+  }
+
+  async function loadProducts() {
+    setLoading(true);
+    try {
+      let url: string;
+      if (search) {
+          url = `${API_BASE}/products/search?search_str=${encodeURIComponent(search)}&page=${page}&limit=${limit}`;
+      } else {
+          const q = new URLSearchParams();
+          q.set("page", String(page));
+          q.set("limit", String(limit));
+          if (selectedCategory) q.set("category", selectedCategory);
+          if (sort) q.set("sort", sort);
+          url = `${API_BASE}/products?${q.toString()}`;
+      }
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch products");
+      const data = await res.json();
+      setProducts(data.products || []);
+      setPages(data.pages || 1);
+      setTotal(data.total || 0);
+    } catch (e) {
+      console.error(e);
+      showToast("Could not load products. Please check connection.");
+    } finally { setLoading(false); }
+  }
+
+  // --- CART & CHECKOUT LOGIC ---
+  async function addToCart(product: Product, quantity = 1) {
+    if (product.stock !== undefined && product.stock <= 0) {
+        showToast("Out of stock");
+        return;
+    }
+
+    if (!isLoggedIn) {
+        setAuthModal(true);
+        showToast("Please log in to add items to your cart.");
+        return;
+    }
+
+    try {
+      const res = await api.post('/cart/add', { product_id: product.id, quantity });
+      if(!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || "Failed to add item to cart");
+      }
+      await fetchCart();
+      showToast(`${product.title} added to cart!`);
+      setCartOpen(true);
+    } catch (error: any) {
+      showToast(error.message);
+    }
+  }
+
+  async function changeQty(product_id: number, qty: number) {
+    if (qty < 1) return;
+
+    if (!isLoggedIn) {
+        setAuthModal(true);
+        showToast("Please log in to manage your cart.");
+        return;
+    }
+    
+    try {
+        const res = await api.post('/cart/update_quantity', { product_id: product_id, quantity: qty });
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.detail || "Failed to update quantity");
+        }
+        await fetchCart();
+    } catch (error: any) {
+        showToast(error.message);
+    }
+  }
+
+  async function removeFromCart(product_id: number) {
+    if (!isLoggedIn) {
+        setAuthModal(true);
+        showToast("Please log in to manage your cart.");
+        return;
+    }
+
+    try {
+        const res = await api.post('/cart/remove', { product_id });
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.detail || "Failed to remove item");
+        }
+        await fetchCart();
+        showToast("Item removed from cart.");
+    } catch (error: any) {
+        showToast(error.message);
+    }
+  }
+  
+  async function checkout() {
+    if (!cart.length) { 
+        showToast("Cart is empty"); 
+        return; 
+    }
+
+    if (!isLoggedIn) {
+        setAuthModal(true);
+        showToast("Please log in to proceed to checkout.");
+        return;
+    }
+
+    try {
+        const res = await api.post('/cart/checkout', {});
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `Checkout failed: ${res.status}`);
+        }
+        const body = await res.json();
+        if (body.url) {
+            window.location.href = body.url; // Redirect to Stripe for payment
+        } else {
+            showToast(`Order placed! Total: ₹${body.total}`);
+            setCart([]);
+            setCartOpen(false);
+        }
+    } catch (e: any) {
+        showToast(String(e.message || e));
+    }
+  }
+
+  // --- WISHLIST LOGIC ---
+  const toggleWishlist = async (product: Product) => {
+    if(!isLoggedIn) {
+        setAuthModal(true);
+        return;
+    }
+
+    const isInWishlist = wishlist.some(item => item.id === product.id);
+    const endpoint = isInWishlist ? '/wishlist/remove' : '/wishlist/add';
+    
+    try {
+        const res = await api.post(endpoint, { product_id: product.id });
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.detail || "Failed to update wishlist");
+        }
+        
+        await fetchWishlist(); // Re-fetch wishlist for consistency
+        if (isInWishlist) {
+            showToast(`${product.title} removed from wishlist.`);
+        } else {
+            showToast(`${product.title} added to wishlist.`);
+        }
+    } catch(error: any) {
+        showToast(error.message);
+    }
+  };
+
+  // --- AUTHENTICATION LOGIC ---
+  function logout() {
+    api.logout();
+    setCart([]);
+    setWishlist([]);
+    showToast("You've been logged out.");
+  }
+
+  async function handleAuth(mode: 'login' | 'register', email: string, username: string, password: string) {
+    try {
+      const url = `${API_BASE}/users/${mode}`;
+      const body = mode === "login" ? { email, password } : { email, username, password };
+      const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || "Authentication failed");
+      }
+      const data = await res.json();
+      if (mode === "login") {
+          localStorage.setItem("accessToken", data.access_token);
+          localStorage.setItem("refreshToken", data.refresh_token);
+          localStorage.setItem("user", username || email);
+          window.dispatchEvent(new Event("authChange"));
+          showToast("Login successful!");
+          setAuthModal(false);
+      } else {
+          showToast("Registered successfully! Please login.");
+      }
+    } catch (e: any) {
+      showToast(e.message);
+    }
+  }
+  
+  // --- UI HELPERS ---
+  const formatPrice = (p?: number) => `₹${(p || 0).toFixed(2)}`;
+  
+  function showToast(message: string) {
+    setUiMessage(message);
+    setTimeout(() => setUiMessage(null), 3000);
+  }
+  
+  const toggleMic = () => {
+    const rec = recognitionRef.current;
+    if (!rec) return;
+    if (listening) rec.stop();
+    else {
+      try { rec.start(); } catch {}
+    }
+  };
+  
+  const handleCategorySelect = (category: string) => {
+    if (selectedCategory === category) {
+      setSelectedCategory("");
+    } else {
+      setSelectedCategory(category); 
+    }
+    setPage(1);
+    document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+
+  // --- RENDER ---
+  return (
+    <>
+      <style>{`
+        /* ... (styles remain the same) ... */
+      `}</style>
+      <div className="min-h-screen bg-white text-gray-800 font-sans">
+        <Header
+          user={user}
+          onLoginClick={() => setAuthModal(true)}
+          onLogoutClick={logout}
+          onCartClick={() => setCartOpen(true)}
+          onWishlistClick={() => setWishlistOpen(true)}
+          cartItemCount={cart.length}
+        />
+        
+        <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
+          <Slider />
+          <CategoryCarousel 
+            categories={categories}
+            onCategorySelect={handleCategorySelect}
+            selectedCategory={selectedCategory}
+          />
+          <div id="products-section" className="py-12 max-w-7xl mx-auto">
+            <h2 className="text-3xl font-bold text-center mb-2">Our Products</h2>
+            <p className="text-center text-gray-500 mb-8">
+              {selectedCategory ? `Showing products in "${selectedCategory.replace(/-/g, ' ')}"` : 'Discover our curated selection of high-quality products.'}
+            </p>
+            <ProductFilters
+              search={search}
+              setSearch={setSearch}
+              toggleMic={toggleMic}
+              listening={listening}
+              micSupported={micSupported}
+              categories={categories}
+              selectedCategory={selectedCategory}
+              setSelectedCategory={(c: string) => {setSelectedCategory(c); setPage(1);}}
+              sort={sort}
+              setSort={(s: string) => {setSort(s); setPage(1);}}
+            />
+            {loading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
+                {Array.from({ length: 8 }).map((_, i) => <ProductCardSkeleton key={i} />)}
+              </div>
+            ) : products.length === 0 ? (
+              <div className="text-center py-16 bg-gray-50 rounded-lg mt-8">
+                  <h3 className="text-xl font-semibold">No Products Found</h3>
+                  <p className="text-gray-500 mt-2">Try adjusting your search or filters.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mt-8">
+                {products.map(p => (
+                  <ProductCard
+                    key={p.id}
+                    product={p}
+                    onViewClick={() => setSelectedProduct(p)}
+                    onAddClick={() => addToCart(p)}
+                    onWishlistClick={() => toggleWishlist(p)}
+                    isInWishlist={wishlist.some(item => item.id === p.id)}
+                    formatPrice={formatPrice}
+                  />
+                ))}
+              </div>
+            )}
+            <Pagination
+              page={page}
+              pages={pages}
+              onPageChange={setPage}
+            />
+          </div>
+          <div className="max-w-7xl mx-auto">
+              <BrandLogos/>
+          </div>
+        </main>
+        <Footer />
+        {selectedProduct && (
+          <ProductDetailDialog
+            product={selectedProduct}
+            onClose={() => setSelectedProduct(null)}
+            onAddToCart={addToCart}
+            formatPrice={formatPrice}
+          />
+        )}
+        <CartSheet
+          isOpen={cartOpen}
+          onClose={() => setCartOpen(false)}
+          cart={cart}
+          changeQty={changeQty}
+          removeFromCart={removeFromCart}
+          checkout={checkout}
+          formatPrice={formatPrice}
+        />
+        <WishlistSheet
+          isOpen={wishlistOpen}
+          onClose={() => setWishlistOpen(false)}
+          wishlist={wishlist}
+          onAddToCart={addToCart}
+          onRemoveFromWishlist={toggleWishlist}
+          formatPrice={formatPrice}
+        />
+        {authModal && <AuthDialog onClose={() => setAuthModal(false)} handleAuth={handleAuth} />}
+        {uiMessage && <Toast message={uiMessage} onDismiss={() => setUiMessage(null)} />}
+      </div>
+    </>
+  );
+}
+
+// --- SUB-COMPONENTS ---
+// No changes needed for sub-components (Header, Slider, etc.), so they are omitted for brevity.
+// You can keep your existing sub-component code.
+// The only change is in the `changeQty` input in `CartSheet` to use the new async function.
+// Make sure to pass the updated `changeQty` and `removeFromCart` functions to `CartSheet`.
